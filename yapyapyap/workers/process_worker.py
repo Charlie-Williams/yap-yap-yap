@@ -33,7 +33,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "4")
 import sys
 import wave
 
-import mixer
+from yapyapyap.core import mixer
 # NOTE: we deliberately do NOT import `recorder` (and therefore not
 # pyaudiowpatch) here, to keep this transcription process entirely free of the
 # audio-capture library.

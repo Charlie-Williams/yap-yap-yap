@@ -23,7 +23,9 @@ try:
 except Exception:
     _HAVE_PIL = False
 
-_ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+from yapyapyap import config
+
+_ASSETS = config.ASSETS_DIR
 KEY = "#FF00FF"             # transparent colour key (magenta - unused in the art)
 PAPER = (255, 254, 251)     # disc fill (theme PAPER)
 HAIRLINE = (228, 206, 114)  # theme BORDER_DEEP

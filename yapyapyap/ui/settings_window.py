@@ -19,12 +19,12 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, ttk
 
-import config
-import theme as T
-import ollama_manager as om
-import whisper_manager as wm
+from yapyapyap import config
+from yapyapyap.ui import theme as T
+from yapyapyap.managers import ollama_manager as om
+from yapyapyap.managers import whisper_manager as wm
 
-_ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+_ASSETS = config.ASSETS_DIR
 TABS = ("General", "AI Models", "AI Notes", "Projects")
 
 

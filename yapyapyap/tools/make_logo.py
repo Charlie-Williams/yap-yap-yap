@@ -1,8 +1,10 @@
 """Generate the YapYapYap bird logo (a cheerful, noisy yellow bird) at several
-sizes plus a Windows .ico. Run:  python make_logo.py"""
+sizes plus a Windows .ico. Run:  python -m yapyapyap.tools.make_logo"""
 import os
 import math
 from PIL import Image, ImageDraw
+
+from yapyapyap import config
 
 S = 4  # supersample factor
 W = 256 * S
@@ -103,8 +105,7 @@ def draw_bird(d):
 
 
 def main():
-    here = os.path.dirname(os.path.abspath(__file__))
-    assets = os.path.join(here, "assets")
+    assets = config.ASSETS_DIR
     os.makedirs(assets, exist_ok=True)
 
     img = Image.new("RGBA", (W, W), (0, 0, 0, 0))

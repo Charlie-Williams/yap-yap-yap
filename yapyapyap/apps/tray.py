@@ -19,10 +19,10 @@ import threading
 import pystray
 from PIL import Image, ImageDraw
 
-import config
-import applog
-import engine
-import summarize
+from yapyapyap import config
+from yapyapyap import applog
+from yapyapyap.core import engine
+from yapyapyap.core import summarize
 
 log = applog.setup()
 
@@ -43,8 +43,7 @@ class YapYapYapTray:
     # ---- icon drawing -------------------------------------------------
     def _make_icon(self):
         """The cheerful bird, with a small status dot when busy."""
-        logo = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "assets", "logo_64.png")
+        logo = os.path.join(config.ASSETS_DIR, "logo_64.png")
         try:
             img = Image.open(logo).convert("RGBA").resize((64, 64))
         except Exception:
@@ -128,5 +127,9 @@ class YapYapYapTray:
         self.icon.run()
 
 
-if __name__ == "__main__":
+def main():
     YapYapYapTray().run()
+
+
+if __name__ == "__main__":
+    main()

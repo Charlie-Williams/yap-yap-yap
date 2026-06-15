@@ -28,15 +28,26 @@ import sys
 import subprocess
 from datetime import datetime
 
-import config
-import summarize
-import ollama_manager as om
+from yapyapyap import config
+from yapyapyap.core import summarize
+from yapyapyap.managers import ollama_manager as om
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_RECORDER_WORKER = os.path.join(_HERE, "recorder_worker.py")
-_PROCESS_WORKER = os.path.join(_HERE, "process_worker.py")
+# The heavy lifting runs in short-lived subprocesses, launched as modules
+# (`python -m yapyapyap.workers.<name>`) so they import cleanly as part of the
+# package. _worker_env() ensures the package is importable in the child even
+# when the app is run uninstalled from the project root.
+_RECORDER_WORKER = "yapyapyap.workers.recorder_worker"
+_PROCESS_WORKER = "yapyapyap.workers.process_worker"
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+
+def _worker_env():
+    env = os.environ.copy()
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (config.SRC_ROOT + os.pathsep + existing
+                         if existing else config.SRC_ROOT)
+    return env
 
 
 class EngineError(RuntimeError):
@@ -193,9 +204,9 @@ class RecordingSession:
     def start(self):
         """Launch the recorder subprocess and wait until it is actually live."""
         self._proc = subprocess.Popen(
-            [sys.executable, _RECORDER_WORKER, self._mic_wav, self._sys_wav],
+            [sys.executable, "-m", _RECORDER_WORKER, self._mic_wav, self._sys_wav],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, creationflags=_NO_WINDOW,
+            text=True, creationflags=_NO_WINDOW, env=_worker_env(),
         )
         line = self._proc.stdout.readline()
         if line.strip() != "READY":
@@ -261,10 +272,10 @@ class RecordingSession:
         """Launch process_worker and stream its progress events to `emit`.
         Returns the final transcript text (authoritative, read from file)."""
         proc = subprocess.Popen(
-            [sys.executable, _PROCESS_WORKER, self._mic_wav, self._sys_wav,
+            [sys.executable, "-m", _PROCESS_WORKER, self._mic_wav, self._sys_wav,
              self.wav, model_size, transcript_path],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            creationflags=_NO_WINDOW,
+            creationflags=_NO_WINDOW, env=_worker_env(),
         )
         total = 0.0
         log_tail = []
@@ -436,9 +447,9 @@ def transcribe_wav(wav_path, model_size=None):
     model_size = model_size or config.WHISPER_MODEL
     out_txt = wav_path + ".txt"
     proc = subprocess.run(
-        [sys.executable, _PROCESS_WORKER, wav_path, wav_path,
+        [sys.executable, "-m", _PROCESS_WORKER, wav_path, wav_path,
          wav_path + ".remix.wav", model_size, out_txt],
-        capture_output=True, text=True, creationflags=_NO_WINDOW,
+        capture_output=True, text=True, creationflags=_NO_WINDOW, env=_worker_env(),
     )
     if proc.returncode != 0:
         raise EngineError("Transcription failed (exit %s).\n%s\n%s"

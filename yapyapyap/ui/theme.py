@@ -23,13 +23,15 @@ import math
 import tkinter as tk
 import tkinter.font as tkfont
 
+from yapyapyap import config
+
 
 # --- Bundled fonts ------------------------------------------------------
 def _load_bundled_fonts():
     if os.name != "nt":
         return
     import ctypes
-    d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "fonts")
+    d = os.path.join(config.ASSETS_DIR, "fonts")
     try:
         for ttf in glob.glob(os.path.join(d, "*.ttf")):
             ctypes.windll.gdi32.AddFontResourceExW(ctypes.c_wchar_p(ttf), 0x10, 0)

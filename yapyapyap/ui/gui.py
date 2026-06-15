@@ -30,20 +30,20 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import messagebox
 
-import config
-import applog
-import engine
-import summarize
-import ollama_manager as om
-import whisper_manager as wm
-import floating
-import theme as T
-from settings_window import SettingsWindow
+from yapyapyap import config
+from yapyapyap import applog
+from yapyapyap.core import engine
+from yapyapyap.core import summarize
+from yapyapyap.managers import ollama_manager as om
+from yapyapyap.managers import whisper_manager as wm
+from yapyapyap.ui import floating
+from yapyapyap.ui import theme as T
+from yapyapyap.ui.settings_window import SettingsWindow
 
 log = applog.setup()
 
 NO_PROJECT = "(No project)"
-_ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+_ASSETS = config.ASSETS_DIR
 
 RAIL_W = 252
 LIST_W = 304

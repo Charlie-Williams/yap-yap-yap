@@ -16,9 +16,20 @@ import time
 import threading
 import subprocess
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_DL_WORKER = os.path.join(_HERE, "whisper_dl_worker.py")
+from yapyapyap import config
+
+# Downloaded in a subprocess launched as a module so it imports cleanly as part
+# of the package (see whisper_dl_worker.py).
+_DL_WORKER = "yapyapyap.workers.whisper_dl_worker"
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+
+def _worker_env():
+    env = os.environ.copy()
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (config.SRC_ROOT + os.pathsep + existing
+                         if existing else config.SRC_ROOT)
+    return env
 
 # Curated transcription models, smallest/fastest first. size_mb is the approx
 # download size (used only to drive the progress bar).
@@ -85,9 +96,9 @@ def download(size, on_progress=None):
     success. Blocking - run on a worker thread.
     """
     expected = next((m["size_mb"] for m in CATALOG if m["size"] == size), 0) * 1024 * 1024
-    proc = subprocess.Popen([sys.executable, _DL_WORKER, size],
+    proc = subprocess.Popen([sys.executable, "-m", _DL_WORKER, size],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, creationflags=_NO_WINDOW)
+                            text=True, creationflags=_NO_WINDOW, env=_worker_env())
 
     stop = threading.Event()
 

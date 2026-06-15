@@ -12,9 +12,13 @@ Everything stays on your computer.
 
 ## Run it
 
+From the project root:
+
 ```powershell
-python gui.py
+python -m yapyapyap
 ```
+
+Or install it once (`pip install -e .`) and just run `yapyapyap`.
 
 A window opens with:
 
@@ -44,12 +48,12 @@ A window opens with:
 Prefer the terminal? There's a command-line version too:
 
 ```powershell
-python cli.py                 # press ENTER to start, ENTER again to stop
-python cli.py --list          # list past conversations
-python cli.py --model small   # use a more accurate (slower) model this run
+python -m yapyapyap.apps.cli                 # press ENTER to start, ENTER again to stop
+python -m yapyapyap.apps.cli --list          # list past conversations
+python -m yapyapyap.apps.cli --model small   # use a more accurate (slower) model this run
 ```
 
-There's also an optional system-tray version: `python app.py`.
+There's also an optional system-tray version: `python -m yapyapyap.apps.tray`.
 
 > **First run is slow:** Whisper downloads its model (a few hundred MB) the first
 > time, then caches it. Later runs are quick.
@@ -163,31 +167,43 @@ it you still get full transcripts - just no AI notes.
 ## How it fits together
 
 ```
-gui.py             the main window                                  <- run me
-cli.py             the command-line version
-app.py             the optional system-tray version
+yapyapyap/                     the application package
+  __main__.py                  `python -m yapyapyap` opens the window     <- run me
+  config.py                    settings + defaults (reads/writes settings.json)
+  applog.py                    logging setup (writes logs/yapyapyap.log)
+  assets/                      bird logo (png/ico) + bundled Sora & Outfit fonts
 
-engine.py          orchestrates recording + transcription + AI notes
-recorder_worker.py records mic + system audio, saves raw stems   (subprocess)
-process_worker.py  mixes the stems + transcribes with faster-whisper (subprocess)
+  apps/
+    cli.py                     the command-line version
+    tray.py                    the optional system-tray version
+    diagnose.py                troubleshooting: tests transcription in isolation
 
-recorder.py        low-level mic + system-audio capture (WASAPI loopback)
-mixer.py           resamples both streams to 16 kHz mono and mixes them
-transcribe.py      in-process speech-to-text helper (used by diagnose.py)
-summarize.py       AI notes + 5-word titles via local Ollama (streaming)
+  core/
+    engine.py                  orchestrates recording + transcription + AI notes
+    recorder.py                low-level mic + system-audio capture (WASAPI loopback)
+    mixer.py                   resamples both streams to 16 kHz mono and mixes them
+    transcribe.py              in-process speech-to-text helper (used by diagnose)
+    summarize.py               AI notes + 5-word titles via local Ollama (streaming)
 
-ollama_manager.py  install Ollama + download/list note-writing models
-whisper_manager.py download/list transcription (Whisper) models
-whisper_dl_worker.py downloads a Whisper model in a subprocess
+  managers/
+    ollama_manager.py          install Ollama + download/list note-writing models
+    whisper_manager.py         download/list transcription (Whisper) models
 
-config.py          settings + defaults (reads/writes settings.json)
-theme.py           the brand: yellow palette, Sora + Outfit fonts, widgets
-floating.py        the draggable, always-on-top recording indicator (the bird)
-settings_window.py the Settings dialog (cog icon)
-make_logo.py       generates the bird logo into assets/
-assets/            bird logo (png/ico) + bundled Sora & Outfit fonts
-applog.py          logging setup (writes logs/yapyapyap.log)
-diagnose.py        troubleshooting: tests transcription in isolation
+  ui/
+    gui.py                     the main window
+    theme.py                   the brand: yellow palette, Sora + Outfit fonts, widgets
+    floating.py                the draggable, always-on-top recording indicator (the bird)
+    settings_window.py         the Settings dialog (cog icon)
+
+  workers/                     short-lived subprocesses (see below)
+    recorder_worker.py         records mic + system audio, saves raw stems
+    process_worker.py          mixes the stems + transcribes with faster-whisper
+    whisper_dl_worker.py       downloads a Whisper model in a subprocess
+
+  tools/
+    make_logo.py               generates the bird logo into assets/
+
+settings.json / logs / recordings / transcripts   live at the project root
 ```
 
 ### Why workers run in separate processes
@@ -213,7 +229,7 @@ Every run writes to **`logs/yapyapyap.log`**.
   normal speakers/headphones (some Bluetooth setups confuse it) and try again.
 - **No system audio captured** - make sure sound is actually playing through the
   default Windows output device while recording.
-- **Anything else** - check `logs/yapyapyap.log` and run `python diagnose.py`.
+- **Anything else** - check `logs/yapyapyap.log` and run `python -m yapyapyap.apps.diagnose`.
 
 ---
 

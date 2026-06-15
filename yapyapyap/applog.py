@@ -20,7 +20,7 @@ import os
 import sys
 import threading
 
-import config
+from yapyapyap import config
 
 
 def setup():

@@ -19,7 +19,7 @@ import traceback
 
 import numpy as np
 
-import config
+from yapyapyap import config
 
 MODEL = config.WHISPER_MODEL  # what the app actually uses (e.g. "base")
 

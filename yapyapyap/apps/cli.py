@@ -21,10 +21,10 @@ import time
 import argparse
 import threading
 
-import config
-import applog
-import engine
-import summarize
+from yapyapyap import config
+from yapyapyap import applog
+from yapyapyap.core import engine
+from yapyapyap.core import summarize
 
 log = applog.setup()
 

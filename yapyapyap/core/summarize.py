@@ -19,7 +19,7 @@ import re
 import urllib.request
 import urllib.error
 
-import config
+from yapyapyap import config
 
 # 127.0.0.1, not "localhost": avoids a ~2s IPv6 stall on Windows.
 OLLAMA_BASE = "http://127.0.0.1:11434"

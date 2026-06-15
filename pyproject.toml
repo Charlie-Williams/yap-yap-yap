@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yapyapyap"
+version = "0.1.0"
+description = "Local meeting recorder, transcriber and note-writer - all offline."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "PyAudioWPatch>=0.2.12.7",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "faster-whisper>=1.0.0",
+    "huggingface_hub>=0.20",
+    "pystray>=0.19",
+    "Pillow>=10.0",
+]
+
+[project.scripts]
+yapyapyap = "yapyapyap.ui.gui:main"
+yapyapyap-tray = "yapyapyap.apps.tray:main"
+yapyapyap-cli = "yapyapyap.apps.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["yapyapyap*"]
+
+[tool.setuptools.package-data]
+yapyapyap = ["assets/*", "assets/fonts/*"]

@@ -30,8 +30,20 @@ import json
 import shutil
 import logging
 
-# The folder this app lives in (used to build the default paths below).
-BASE = os.path.dirname(os.path.abspath(__file__))
+# The `yapyapyap` package folder (holds the code and bundled assets).
+PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Bundled assets (logo, fonts) live alongside the code so they move with it.
+ASSETS_DIR = os.path.join(PACKAGE_DIR, "assets")
+# The project root - the folder containing the package. Runtime state
+# (settings.json, logs, recordings, transcripts) lives here so the whole
+# project folder stays portable: copy it around and your files still resolve.
+PROJECT_ROOT = os.path.dirname(PACKAGE_DIR)
+# The directory that must be on PYTHONPATH for `import yapyapyap` to work;
+# child worker processes are launched with this on their path (see engine.py).
+SRC_ROOT = PROJECT_ROOT
+
+# Default paths are built relative to the project root (see above).
+BASE = PROJECT_ROOT
 
 APP_NAME = "YapYapYap"
 SETTINGS_FILE = os.path.join(BASE, "settings.json")

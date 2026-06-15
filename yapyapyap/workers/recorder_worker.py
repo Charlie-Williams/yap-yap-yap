@@ -34,7 +34,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "4")
 import sys
 import traceback
 
-import recorder  # PyAudio + stdlib wave only - no numpy/scipy/whisper here
+from yapyapyap.core import recorder  # PyAudio + stdlib wave only - no numpy/scipy/whisper here
 
 
 def main():
