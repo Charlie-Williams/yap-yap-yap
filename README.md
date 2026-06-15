@@ -1,0 +1,225 @@
+# YapYapYap
+
+A simple, fully-local meeting recorder and transcriber for Windows. Hit one
+button to record, hit it again to stop, and YapYapYap captures **both your
+microphone and the system audio** (everyone else on the call), transcribes it
+**on your own machine** (no cloud, no API key), and - if you've set up a local
+LLM - turns the transcript into clean notes.
+
+Everything stays on your computer.
+
+---
+
+## Run it
+
+```powershell
+python gui.py
+```
+
+A window opens with:
+
+- A big **Start recording** button, with a **Project picker** beside it (see
+  Projects below). It turns red and reads **Stop recording** while recording,
+  with a live timer.
+- After you press Stop, a **live progress view** shows exactly what's happening
+  (saving → mixing → loading the model → transcribing, with a running %) and the
+  **transcript appears line by line as it's produced**.
+- **Generate AI meeting notes** - once a conversation has a transcript, a button
+  turns it into structured notes (summary, key points, decisions, next steps)
+  using a local model. The notes stream in live, just like the transcript.
+- A list of **past conversations** on the left - click one to read its notes and
+  transcript on the right.
+- **Minimise while recording** and a little **floating bird** appears - it
+  pulses to show it's recording, sits on top of every other window, can be
+  dragged anywhere, glows when you hover, and clicking it brings the app back.
+- A **cog icon** (top-right) that opens **Settings** - every configurable option
+  lives there.
+
+> **Why does transcription take a few seconds?** Each recording is transcribed in
+> a fresh isolated process (this is what keeps the app from crashing), so the
+> Whisper model is loaded each time - the "Loading the … model" step. The very
+> first run also downloads the model. Smaller models (`tiny`/`base`) load and run
+> faster; pick one in Settings.
+
+Prefer the terminal? There's a command-line version too:
+
+```powershell
+python cli.py                 # press ENTER to start, ENTER again to stop
+python cli.py --list          # list past conversations
+python cli.py --model small   # use a more accurate (slower) model this run
+```
+
+There's also an optional system-tray version: `python app.py`.
+
+> **First run is slow:** Whisper downloads its model (a few hundred MB) the first
+> time, then caches it. Later runs are quick.
+
+---
+
+## Settings (the cog icon)
+
+Everything you can configure is in the in-app **Settings** window - no need to
+edit code. It has three tabs:
+
+**General**
+- **Transcription model** - `tiny` / `base` / `small` / `medium` (speed vs.
+  accuracy).
+- **Recordings folder** - master history; every conversation is saved here.
+- **Default transcripts folder** - where the tidy copy goes when no project is
+  selected.
+
+**AI Models** - manage the local model used for notes, no terminal needed:
+- If Ollama (the local model runner) isn't installed, an **Install Ollama**
+  button sets it up for you.
+- Then browse a shortlist of good models (with **size + description**), hit
+  **Download** (a progress bar shows the download), and the model becomes
+  usable. The one marked **● In use** is what writes your notes; click **Use** on
+  any installed model to switch.
+
+**AI Notes**
+- The **prompt** used to generate notes is fully editable here (keep the
+  `{transcript}` placeholder). A *Reset to default* button restores it.
+
+**Projects**
+- Add/remove **projects**, each with its own name and folder.
+
+Changes are saved to `settings.json` and take effect on your next recording /
+next time you generate notes.
+
+---
+
+## Projects
+
+If you juggle several workstreams (say *Adeo* and *Risk Engine*), add them under
+**Settings → Projects**, each pointing at its own folder. Then:
+
+- Pick a project from the **dropdown next to Start recording** before you record.
+- That conversation's **transcript and AI notes are copied into the project's
+  folder**, and the **project name is included in the file names**.
+- Your **Conversations history still shows everything**, regardless of project,
+  with the project name shown next to each entry.
+
+Leave the picker on **(No project)** to use the default transcripts folder.
+
+---
+
+## AI meeting notes
+
+After a conversation is transcribed, click **✨ Generate AI meeting notes**. Using
+your local model and the (editable) prompt from Settings, it writes a structured
+set of notes - summary, key discussion points, decisions, and action items /
+next steps - streamed in live. Notes are saved next to the recording and copied
+into the conversation's project folder.
+
+This runs on a local model via **Ollama**. The first time, go to **Settings → AI
+Models**, install Ollama (one click) and download a model - then it just works.
+If you click Generate before that's set up, the app tells you exactly what to do.
+
+---
+
+## What you get per conversation
+
+**The recordings folder** - full output (the master history):
+
+- `meeting_<timestamp>[__<project>].wav` - the mixed audio (you + everyone else)
+- `meeting_<timestamp>[__<project>]_transcript.txt` - timestamped transcript
+- `meeting_<timestamp>[__<project>]_notes.md` - AI notes *(once you generate them)*
+
+**The project folder (or default transcripts folder)** - a tidy copy of the
+transcript (and notes) per conversation, named like:
+
+```
+2026-06-09_1432 - Adeo - quick budget sync.txt
+```
+
+That's the date, the time, the project (if any), and a max-5-word AI summary.
+(Without Ollama, the summary falls back to the first few words spoken, so files
+are always named sensibly.)
+
+---
+
+## One-time setup
+
+Install **Python 3.10+** ([python.org](https://www.python.org/downloads/), tick
+**"Add Python to PATH"**). Then, in this folder:
+
+```powershell
+pip install -r requirements.txt
+```
+
+> `PyAudioWPatch` provides the system-audio (WASAPI loopback) capture. If pip
+> can't find it: `python -m pip install --upgrade pip` first.
+
+### AI notes (local model)
+
+You don't need to set anything up by hand: open **Settings → AI Models**, click
+**Install Ollama**, then **Download** a model. (If you'd rather do it yourself:
+install Ollama from <https://ollama.com/download> and `ollama pull llama3.2`.)
+It runs quietly in the background and the app detects it automatically. Without
+it you still get full transcripts - just no AI notes.
+
+---
+
+## How it fits together
+
+```
+gui.py             the main window                                  <- run me
+cli.py             the command-line version
+app.py             the optional system-tray version
+
+engine.py          orchestrates recording + transcription + AI notes
+recorder_worker.py records mic + system audio, saves raw stems   (subprocess)
+process_worker.py  mixes the stems + transcribes with faster-whisper (subprocess)
+
+recorder.py        low-level mic + system-audio capture (WASAPI loopback)
+mixer.py           resamples both streams to 16 kHz mono and mixes them
+transcribe.py      in-process speech-to-text helper (used by diagnose.py)
+summarize.py       AI notes + 5-word titles via local Ollama (streaming)
+
+ollama_manager.py  install Ollama + download/list note-writing models
+whisper_manager.py download/list transcription (Whisper) models
+whisper_dl_worker.py downloads a Whisper model in a subprocess
+
+config.py          settings + defaults (reads/writes settings.json)
+theme.py           the brand: yellow palette, Sora + Outfit fonts, widgets
+floating.py        the draggable, always-on-top recording indicator (the bird)
+settings_window.py the Settings dialog (cog icon)
+make_logo.py       generates the bird logo into assets/
+assets/            bird logo (png/ico) + bundled Sora & Outfit fonts
+applog.py          logging setup (writes logs/yapyapyap.log)
+diagnose.py        troubleshooting: tests transcription in isolation
+```
+
+### Why workers run in separate processes
+
+On Windows, the audio-capture library (PortAudio) and the speech-to-text engine
+(ctranslate2) each load their own native OpenMP runtime. Once a WASAPI capture
+stream has been opened in a process, running Whisper in that **same** process -
+or even just spawning a subprocess from it - crashes with a hard native segfault
+and no Python error. (That was the old "crash when I press Stop" bug.)
+
+The fix is strict process isolation: the app's window process never opens an
+audio stream or loads Whisper itself. It launches short-lived worker
+subprocesses for recording and for transcription, so the two native runtimes are
+never in the same process and can't collide.
+
+---
+
+## Logs & troubleshooting
+
+Every run writes to **`logs/yapyapyap.log`**.
+
+- **"Could not find a loopback device"** - set Windows sound output to your
+  normal speakers/headphones (some Bluetooth setups confuse it) and try again.
+- **No system audio captured** - make sure sound is actually playing through the
+  default Windows output device while recording.
+- **Anything else** - check `logs/yapyapyap.log` and run `python diagnose.py`.
+
+---
+
+## A note on consent
+
+Recording conversations is subject to consent laws that vary by country and
+region - and several places (Spain, the EU, the UK) treat this seriously. This
+tool is for personal/learning use. If you point it at real client or colleague
+meetings, tell participants and get their agreement first.
