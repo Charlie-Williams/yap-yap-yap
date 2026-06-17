@@ -40,7 +40,7 @@ from yapyapyap.managers import whisper_manager as wm
 # when the app is run uninstalled from the project root.
 _RECORDER_WORKER = "yapyapyap.workers.recorder_worker"
 _PROCESS_WORKER = "yapyapyap.workers.process_worker"
-_LIVE_WORKER = "yapyapyap.workers.live_worker"
+_STREAM_WORKER = "yapyapyap.workers.stream_worker"
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
@@ -53,19 +53,13 @@ def _worker_env():
     return env
 
 
-def _live_model():
-    """The model to use for LIVE captions: the smallest one already downloaded
-    (live wants speed; the final pass on Stop uses the configured model for
-    accuracy). Returns None if no model is downloaded, in which case live
-    captions are skipped rather than triggering a surprise download."""
+def _bg_model_available(model):
+    """True if `model` is already downloaded, so background transcription can
+    start without triggering a surprise download mid-recording."""
     try:
-        have = set(wm.downloaded_sizes())
+        return wm.is_downloaded(model)
     except Exception:
-        have = set()
-    for size in config.WHISPER_MODELS:  # smallest -> largest
-        if size in have:
-            return size
-    return None
+        return False
 
 
 class EngineError(RuntimeError):
@@ -208,11 +202,8 @@ def write_notes_txt(stamp, project, notes, title, dest_dir):
 class RecordingSession:
     """Drives one record -> transcribe cycle via subprocesses."""
 
-    def __init__(self, project=None, on_live=None):
+    def __init__(self, project=None):
         self.project = project
-        # on_live(kind, value): "caption" with a transcript line, or "fallback"
-        # when live captioning gave up (machine can't keep up). Optional.
-        self.on_live = on_live
         os.makedirs(config.RECORDINGS_DIR, exist_ok=True)
         os.makedirs(config.TRANSCRIPTS_DIR, exist_ok=True)
         self.stamp, self.base = _new_base(project)
@@ -220,8 +211,9 @@ class RecordingSession:
         self._mic_wav = self.base + ".mic.wav"
         self._sys_wav = self.base + ".sys.wav"
         self._proc = None
-        self._live_proc = None
-        self._live_thread = None
+        self._bg_proc = None      # background "head-start" transcriber
+        self._bg_model = None
+        self.bg_active = False     # True once background transcription is running
 
     # ---------------------------------------------------------------- record
     def start(self):
@@ -235,61 +227,93 @@ class RecordingSession:
         if line.strip() != "READY":
             err = self._proc.stderr.read() if self._proc.stderr else ""
             raise EngineError("Recorder failed to start.\n" + err.strip())
-        self._start_live()
+        self._start_bg()
 
-    # --------------------------------------------------------- live captions
-    def _start_live(self):
-        """Start the optional live transcriber. Best-effort: any failure just
-        means no live captions — recording and the final transcript are
-        unaffected."""
-        if self.on_live is None:
-            return
-        model = _live_model()
-        if not model:
-            return  # nothing downloaded yet; don't trigger a surprise download
+    # ------------------------------------------------ background transcription
+    # While recording, a separate clean process transcribes the audio as it's
+    # written to disk, using the configured (accurate) model. By the time you
+    # press Stop most of the work is already done, so finishing is quick. It's
+    # best-effort: if it can't start or dies, Stop falls back to a full pass.
+    def _start_bg(self):
+        model = config.WHISPER_MODEL
+        if not _bg_model_available(model):
+            return  # model not downloaded yet — don't download mid-recording
+        transcript_path = self.base + "_transcript.txt"
         try:
-            self._live_proc = subprocess.Popen(
-                [sys.executable, "-m", _LIVE_WORKER, self._mic_wav,
-                 self._sys_wav, model],
+            self._bg_proc = subprocess.Popen(
+                [sys.executable, "-m", _STREAM_WORKER, self._mic_wav,
+                 self._sys_wav, model, self.wav, transcript_path],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, text=True,
                 creationflags=_NO_WINDOW, env=_worker_env(),
             )
+            self._bg_model = model
+            self.bg_active = True
         except Exception:
-            self._live_proc = None
-            return
-        self._live_thread = threading.Thread(target=self._pump_live, daemon=True)
-        self._live_thread.start()
+            self._bg_proc = None
+            self.bg_active = False
 
-    def _pump_live(self):
-        proc = self._live_proc
-        if not proc or not proc.stdout:
-            return
-        for raw in proc.stdout:
-            line = raw.rstrip("\r\n")
-            if line.startswith("@SEG "):
-                _, _, val = line.partition(" ")
-                _end, _, text = val.partition("\t")
-                if self.on_live:
+    def _finalize_bg(self, transcript_path, emit):
+        """Tell the background transcriber to finish the remaining tail and
+        write its outputs, streaming progress to `emit`. Returns the transcript
+        text, or None if it didn't complete (so the caller can fall back)."""
+        proc, self._bg_proc = self._bg_proc, None
+        if proc is None or proc.poll() is not None:
+            return None
+        try:
+            proc.stdin.write("finalize\n")
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            return None
+        total, ok = 0.0, False
+        try:
+            for raw in proc.stdout:
+                line = raw.rstrip("\r\n")
+                if not line.startswith("@"):
+                    continue
+                tag, _, val = line[1:].partition(" ")
+                if tag == "DUR":
                     try:
-                        self.on_live("caption", text)
-                    except Exception:
-                        pass
-            elif line.startswith("@FALLBACK"):
-                if self.on_live:
+                        total = float(val)
+                    except ValueError:
+                        total = 0.0
+                elif tag == "BAR":
+                    # Jump the bar straight to the portion already transcribed
+                    # in the background, before the tail starts streaming.
                     try:
-                        self.on_live("fallback", "")
-                    except Exception:
+                        emit("bar", max(0.0, min(float(val), 1.0)))
+                    except ValueError:
                         pass
+                elif tag == "SEG":
+                    end_s, _, text = val.partition("\t")
+                    try:
+                        frac = (float(end_s) / total) if total > 0 else 0.0
+                    except ValueError:
+                        frac = 0.0
+                    emit("seg", (max(0.0, min(frac, 1.0)), text))
+                elif tag == "OK":
+                    ok = True
+        finally:
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        if not ok:
+            return None
+        try:
+            with open(transcript_path, encoding="utf-8") as f:
+                return f.read().strip()
+        except OSError:
+            return None
 
-    def _stop_live(self):
-        proc, self._live_proc = self._live_proc, None
+    def _cancel_bg(self):
+        proc, self._bg_proc = self._bg_proc, None
         if not proc:
             return
         try:
             if proc.poll() is None:
                 try:
-                    proc.stdin.write("stop\n")
+                    proc.stdin.write("cancel\n")
                     proc.stdin.flush()
                 except (BrokenPipeError, OSError):
                     pass
@@ -322,7 +346,6 @@ class RecordingSession:
                     pass
 
         _emit("step", "Saving the recording")
-        self._stop_live()  # end live captions; the final pass below is authoritative
         try:
             self._proc.stdin.write("stop\n")
             self._proc.stdin.flush()
@@ -339,11 +362,19 @@ class RecordingSession:
                 except (IndexError, ValueError):
                     pass
         if not ok:
+            self._cancel_bg()
             self._cleanup_stems()
             raise EngineError("Recording failed.\n" + (err or out or "").strip())
 
         transcript_path = self.base + "_transcript.txt"
-        transcript = self._run_transcription(model_size, transcript_path, _emit)
+        # If a background transcriber kept up during recording, just finish the
+        # tail (fast). Otherwise fall back to a full mix + transcribe pass.
+        transcript = None
+        if self._bg_proc is not None:
+            _emit("step", "Transcribing")  # immediate UI feedback while it wraps up
+            transcript = self._finalize_bg(transcript_path, _emit)
+        if transcript is None:
+            transcript = self._run_transcription(model_size, transcript_path, _emit)
         self._cleanup_stems()
 
         # Tidy transcript copy into the project (or default transcripts) folder.
@@ -366,7 +397,7 @@ class RecordingSession:
 
     def cancel(self):
         """Abort a recording without transcribing (best effort)."""
-        self._stop_live()
+        self._cancel_bg()
         if self._proc and self._proc.poll() is None:
             try:
                 self._proc.stdin.write("stop\n")

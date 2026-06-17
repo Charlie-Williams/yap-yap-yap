@@ -257,6 +257,12 @@ def draw_icon(c, name, cx, cy, s, color, width=1.7):
             r = h * (0.95 if i % 2 == 0 else 0.3)
             p += [cx + r * math.cos(a), cy + r * math.sin(a)]
         c.create_polygon(p, smooth=False, fill=color, outline=color, width=1)
+    elif name == "refresh":
+        # A circular arrow (regenerate / override): a near-full arc with a small
+        # arrowhead at the opening on the upper right.
+        c.create_arc(cx - 0.72 * h, cy - 0.72 * h, cx + 0.72 * h, cy + 0.72 * h,
+                     start=60, extent=280, style="arc", outline=color, width=w)
+        L(0.36, -0.62, 0.74, -0.46, 0.54, -0.04)
     elif name == "check":
         L(-0.6, 0.05, -0.15, 0.5, 0.65, -0.45)
     elif name == "plus":

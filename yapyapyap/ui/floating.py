@@ -64,9 +64,15 @@ class RecordingIndicator(tk.Toplevel):
         self._bird = None
         if _HAVE_PIL:
             try:
-                self._bird = Image.open(
-                    os.path.join(_ASSETS, "logo_256.png")).convert("RGBA").resize(
-                    (self.BIRD, self.BIRD), Image.LANCZOS)
+                bird = Image.open(
+                    os.path.join(_ASSETS, "logo_256.png")).convert("RGBA")
+                # The logo art isn't centred within its own canvas, so crop to
+                # the bird's actual pixels; we then place THAT centred in the
+                # disc (resized per-frame, preserving its aspect ratio).
+                bbox = bird.getchannel("A").getbbox()
+                if bbox:
+                    bird = bird.crop(bbox)
+                self._bird = bird
             except Exception:
                 self._bird = None
         self._photo = None
@@ -141,12 +147,16 @@ class RecordingIndicator(tk.Toplevel):
         d.ellipse([cx - R, cx - R, cx + R, cx + R], outline=edge + (255,),
                   width=2 * ss)
 
-        # The bird, slightly above centre to make room for the dot.
-        bird_px = self.BIRD * ss
+        # The bird, centred (preserving its aspect ratio), nudged up a touch to
+        # leave room for the status dot.
         if self._bird is not None:
-            bird = self._bird.resize((bird_px, bird_px), Image.LANCZOS)
-            img.alpha_composite(bird, (int(cx - bird_px / 2),
-                                       int(cx - bird_px / 2 - 2 * ss)))
+            bw, bh = self._bird.size
+            target = self.BIRD * ss
+            scale = target / max(bw, bh)
+            nw, nh = max(1, int(bw * scale)), max(1, int(bh * scale))
+            bird = self._bird.resize((nw, nh), Image.LANCZOS)
+            img.alpha_composite(bird, (int(cx - nw / 2),
+                                       int(cx - nh / 2 - 2 * ss)))
 
         # Status dot (bottom-centre), breathing gently.
         breathe = 0.5 + 0.5 * math.sin(self._phase * 2 * math.pi)

@@ -445,10 +445,9 @@ class App:
             minimized = self.root.state() == "iconic"
         except tk.TclError:
             minimized = False
-        busy = self.state in ("recording", "starting", "processing")
-        if minimized and busy:
-            accent = (184, 134, 11) if self.state == "processing" else (229, 72, 77)
-            self.indicator.show(accent)
+        # Only overlay the floating indicator while actually recording.
+        if minimized and self.state == "recording":
+            self.indicator.show((229, 72, 77))
         else:
             self.indicator.hide()
 
@@ -540,6 +539,13 @@ class App:
                                  font=T.semi(9))
         self._sub_state = None  # (text, color, dot, pulse)
 
+        # Cancel control — only shown while recording (see _set_state).
+        self.cancel_btn = T.RoundedButton(
+            rail, "Cancel recording", command=self._cancel_recording,
+            fill=T.YELLOW, fill_hover=T.RAIL_HOVER, fg=T.RECORD, bg=T.YELLOW,
+            font_=T.semi(9), padx=14, pady=7, radius=10, border=T.RECORD,
+            min_width=RAIL_INNER)
+
         # Project picker.
         self.project_var = tk.StringVar(value=NO_PROJECT)
         self.project_pill = RailPill(rail, self._open_project_menu)
@@ -614,6 +620,11 @@ class App:
                                      ("transcript", "Transcript")],
                                     command=self._set_view_mode, bg=T.PAPER)
         self._icons = tk.Frame(self.topbar, bg=T.PAPER)
+        # Regenerate AI notes (only shown for conversations that already have
+        # notes). Re-runs generation with the latest prompt, overwriting them.
+        self.regen_btn = T.IconButton(self._icons, "refresh",
+                                      self.regenerate_ai_notes, bg=T.PAPER,
+                                      tooltip="Regenerate notes")
         self.copy_btn = T.IconButton(self._icons, "copy", self._copy_doc,
                                      bg=T.PAPER)
         self.copy_btn.pack(side="left", padx=(0, 8))
@@ -864,6 +875,13 @@ class App:
             self._live_count = 0
             self._frac = None
             self._show_processing_view()
+        # Cancel control: visible only while recording.
+        if hasattr(self, "cancel_btn"):
+            if state == "recording":
+                self.cancel_btn.pack(padx=16, pady=(0, 6),
+                                     before=self.project_pill)
+            else:
+                self.cancel_btn.pack_forget()
         self.refresh_list()
         if hasattr(self, "indicator"):
             self._update_indicator()
@@ -976,10 +994,10 @@ class App:
     def _show_recording_view(self):
         self._update_topbar()
         area = self._state_area()
-        hero = tk.Frame(area, bg=T.PAPER)
-        hero.pack(pady=(34, 8))
+        inner = tk.Frame(area, bg=T.PAPER)
+        inner.place(relx=0.5, rely=0.44, anchor="center")
 
-        pill = tk.Canvas(hero, width=86, height=30, bg=T.PAPER,
+        pill = tk.Canvas(inner, width=86, height=30, bg=T.PAPER,
                          highlightthickness=0, bd=0)
         pill.pack()
         T.round_rect(pill, 1, 1, 85, 29, 14, fill="#FCE9EA",
@@ -989,18 +1007,23 @@ class App:
         pill.create_text(52, 15, text="REC", fill=T.RECORD, font=T.bold(9))
         self._rec_pill = pill
 
-        self._hero_timer = tk.Label(hero, text="00:00", bg=T.PAPER, fg=T.INK,
+        self._hero_timer = tk.Label(inner, text="00:00", bg=T.PAPER, fg=T.INK,
                                     font=T.head(44))
         self._hero_timer.pack(pady=(10, 6))
 
-        self._wave = tk.Canvas(hero, width=336, height=44, bg=T.PAPER,
+        self._wave = tk.Canvas(inner, width=336, height=44, bg=T.PAPER,
                                highlightthickness=0, bd=0)
-        self._wave.pack(pady=(2, 12))
+        self._wave.pack(pady=(2, 14))
         import random
         self._wave_h = [random.randint(6, 38) for _ in range(42)]
 
-        chips = tk.Frame(hero, bg=T.PAPER)
-        chips.pack()
+        tk.Label(inner, text="Listening to your microphone and this PC's audio",
+                 bg=T.PAPER, fg=T.MUTED, font=T.font(10)).pack()
+        if getattr(self.session, "bg_active", False):
+            tk.Label(inner, text="Transcribing as you go, so finishing is quick",
+                     bg=T.PAPER, fg=T.SUBTLE, font=T.font(9)).pack(pady=(2, 0))
+        chips = tk.Frame(inner, bg=T.PAPER)
+        chips.pack(pady=(10, 0))
         for label in ("Microphone", "System audio"):
             f = tkfont.Font(family=T.UI_SEMI, size=9)
             w = f.measure(label) + 38
@@ -1012,74 +1035,7 @@ class App:
             c.create_oval(12, 10, 18, 16, fill=T.GREEN, outline=T.GREEN)
             c.create_text(26, 13, text=label, anchor="w", fill=T.INK_SOFT,
                           font=T.semi(9))
-
-        # Live transcript panel — fills the space below the hero.
-        caps = tk.Frame(area, bg=T.PAPER)
-        caps.pack(fill="both", expand=True, padx=48, pady=(8, 26))
-        tk.Label(caps, text="LIVE TRANSCRIPT", bg=T.PAPER, fg=T.SUBTLE,
-                 font=T.semi(8), anchor="w").pack(fill="x", pady=(0, 4))
-        self._live_caps = tk.Text(caps, wrap="word", bg=T.PAPER, fg=T.INK_SOFT,
-                                  bd=0, highlightthickness=0, font=T.font(11),
-                                  padx=2, pady=2, spacing1=2, spacing3=6,
-                                  cursor="arrow")
-        self._live_caps.pack(fill="both", expand=True)
-        self._live_caps.tag_configure("capts", foreground=T.AMBER,
-                                      font=T.semi(10))
-        self._live_caps.tag_configure("cap", foreground=T.INK_SOFT,
-                                      font=T.font(11))
-        self._live_caps.tag_configure("capnote", foreground=T.MUTED,
-                                      font=T.font(10), justify="left")
-        self._live_caps.tag_configure("capwait", foreground=T.SUBTLE,
-                                      font=T.font(10))
-        self._live_caps.insert(
-            "end", "Captions will appear here as people speak…", "capwait")
-        self._live_caps.configure(state="disabled")
-        self._caps_started = False
-
         self._animate_wave()
-
-    def _append_caption(self, line):
-        v = getattr(self, "_live_caps", None)
-        if not v:
-            return
-        try:
-            v.configure(state="normal")
-            if not self._caps_started:
-                v.delete("1.0", "end")
-                self._caps_started = True
-            m = self._TS_RE.match((line or "").strip())
-            if m:
-                ts, text = m.groups()
-                v.insert("end", ts + "  ", "capts")
-                v.insert("end", text + "\n", "cap")
-            else:
-                v.insert("end", (line or "").strip() + "\n", "cap")
-            v.see("end")
-            v.configure(state="disabled")
-        except tk.TclError:
-            pass
-
-    def _live_fallback(self):
-        v = getattr(self, "_live_caps", None)
-        if not v:
-            return
-        try:
-            v.configure(state="normal")
-            if not self._caps_started:
-                v.delete("1.0", "end")
-                self._caps_started = True
-                v.insert("end", "Live captions aren't keeping up on this "
-                         "computer, so they're paused.\nYou'll get the full, "
-                         "accurate transcript the moment you press Stop.",
-                         "capnote")
-            else:
-                v.insert("end", "\n(Live captions paused — this computer can't "
-                         "keep up. The full transcript follows on Stop.)\n",
-                         "capnote")
-            v.see("end")
-            v.configure(state="disabled")
-        except tk.TclError:
-            pass
 
     def _animate_wave(self):
         if self.state != "recording" or not getattr(self, "_wave", None):
@@ -1266,6 +1222,16 @@ class App:
             self._sub_set(f"Transcribing… {pct}", T.AMBER, dot=T.AMBER)
             self._draw_bar()
             self._append_live_line(line)
+        elif kind == "bar":
+            # Move the progress bar without adding a transcript line (used to
+            # jump straight to the portion already transcribed in the background).
+            self._frac = max(0.0, min(float(value), 1.0))
+            pct = f"{int(self._frac * 100)}%"
+            for r in self._step_rows:
+                if r["state"] == "active":
+                    r["pct"].configure(text=pct)
+            self._sub_set(f"Transcribing… {pct}", T.AMBER, dot=T.AMBER)
+            self._draw_bar()
 
     _TS_RE = re.compile(r"^\[(\d+:\d{2}(?::\d{2})?)\]\s*(.*)$")
 
@@ -1342,6 +1308,23 @@ class App:
         self._render_notes_generating()
         self._gen_spin_tick()
         threading.Thread(target=self._do_generate, args=(base,), daemon=True).start()
+
+    def regenerate_ai_notes(self):
+        """Re-run notes generation for the selected conversation, overwriting the
+        existing notes using the latest prompt (config.SUMMARY_PROMPT)."""
+        if self._generating or self.state != "idle":
+            return
+        base = self._selected_base()
+        if not base or not os.path.exists(base + "_notes.md"):
+            return
+        if not messagebox.askyesno(
+                config.APP_NAME,
+                "Regenerate these notes from the transcript using your current "
+                "prompt?\n\nThis replaces the existing notes."):
+            return
+        # generate_ai_notes streams with config.SUMMARY_PROMPT and engine
+        # rewrites _notes.md, so it naturally overrides the old notes.
+        self.generate_ai_notes()
 
     def _do_generate(self, base):
         try:
@@ -1586,23 +1569,9 @@ class App:
     # ---- recording lifecycle (start is async so the UI never freezes) ----
     def start_recording(self):
         log.info("Starting recording...")
-        self.session = engine.RecordingSession(
-            project=self._selected_project(), on_live=self._on_live_event)
+        self.session = engine.RecordingSession(project=self._selected_project())
         self._set_state("starting")
         threading.Thread(target=self._do_start, daemon=True).start()
-
-    # ---- live captions during recording ----
-    def _on_live_event(self, kind, value):
-        # Called from the session's background pump thread - marshal to the UI.
-        self.root.after(0, lambda: self._apply_live_event(kind, value))
-
-    def _apply_live_event(self, kind, value):
-        if self.state not in ("recording", "starting"):
-            return
-        if kind == "caption":
-            self._append_caption(value)
-        elif kind == "fallback":
-            self._live_fallback()
 
     def _do_start(self):
         try:
@@ -1627,6 +1596,24 @@ class App:
         log.info("Stop pressed - beginning processing.")
         self._set_state("processing")
         threading.Thread(target=self._process, daemon=True).start()
+
+    def _cancel_recording(self):
+        if self.state != "recording":
+            return
+        if not messagebox.askyesno(
+                config.APP_NAME,
+                "Cancel this recording?\n\n"
+                "The recording will be discarded and can't be recovered."):
+            return
+        log.info("Recording cancelled by user.")
+        sess, self.session = self.session, None
+        self._set_state("idle")
+        self._restore_reader()
+        self._toast("Recording cancelled", T.MUTED, dot=T.SUBTLE)
+        # Tearing down the recorder + background transcriber does I/O, so do it
+        # off the UI thread.
+        if sess is not None:
+            threading.Thread(target=sess.cancel, daemon=True).start()
 
     def _process(self):
         try:
@@ -1821,6 +1808,11 @@ class App:
         if has_tx:
             tabs.append(("transcript", "Transcript"))
         self._update_topbar(tabs or None, self._view_mode, icons=bool(tabs))
+
+        # Offer "regenerate" only when notes already exist and we're showing them.
+        self.regen_btn.pack_forget()
+        if has_notes and has_tx and self._view_mode == "notes":
+            self.regen_btn.pack(side="left", padx=(0, 8), before=self.copy_btn)
 
         if self._view_mode == "notes" and not has_notes and has_tx:
             self._show_generate_cta(it)

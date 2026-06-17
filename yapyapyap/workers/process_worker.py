@@ -27,8 +27,16 @@ Usage (invoked by engine.py):
 """
 import os
 
+# Sized to the machine (leaving headroom — see config). This runs after Stop,
+# when the user is waiting, so it may use a bit more of the CPU. Must be set
+# before numpy/ctranslate2 import.
+from yapyapyap import config
+_CPU_THREADS = config.foreground_cpu_threads()
+# How many VAD chunks the batched pipeline processes in parallel. Scaled to the
+# machine (and memory) — bigger isn't faster past the core count.
+_BATCH_SIZE = max(4, min(_CPU_THREADS, 16))
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
-os.environ.setdefault("OMP_NUM_THREADS", "4")
+os.environ.setdefault("OMP_NUM_THREADS", str(_CPU_THREADS))
 
 import sys
 import wave
@@ -78,12 +86,18 @@ def main():
 
     # 2) Load the model (first run downloads it, which is the slow part).
     emit("STEP", "Loading the Whisper %s model" % model_size.capitalize())
-    from faster_whisper import WhisperModel
-    model = WhisperModel(model_size, device="cpu", compute_type="int8")
+    from faster_whisper import WhisperModel, BatchedInferencePipeline
+    model = WhisperModel(model_size, device="cpu", compute_type="int8",
+                         cpu_threads=_CPU_THREADS)
+    # This is the full pass the user actively waits on, over the whole recording,
+    # so use the batched pipeline (VAD-chunks the audio and transcribes chunks in
+    # parallel) with greedy decoding — ~2.8x faster than plain beam-search on CPU.
+    pipeline = BatchedInferencePipeline(model=model)
 
     # 3) Transcribe, streaming each segment out as it is produced.
     emit("STEP", "Transcribing")
-    segments, info = model.transcribe(mixed, beam_size=5)
+    segments, info = pipeline.transcribe(mixed, beam_size=1,
+                                         batch_size=_BATCH_SIZE)
     emit("DUR", "%.3f" % float(getattr(info, "duration", 0) or 0))
 
     lines = []
