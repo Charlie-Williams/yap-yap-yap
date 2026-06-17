@@ -1,8 +1,9 @@
 """
 recorder_worker.py
 ------------------
-A standalone recording process. It captures mic + system audio and, on a "stop"
-signal, saves the two RAW streams as .wav files, then exits.
+A standalone recording process. It captures mic + system audio, streaming each
+stream straight to its .wav file as it arrives, and on a "stop" signal finalises
+both files and exits.
 
 Why this process is deliberately minimal
 ----------------------------------------
@@ -44,7 +45,7 @@ def main():
 
     mic_wav, sys_wav = sys.argv[1], sys.argv[2]
 
-    rec = recorder.Recorder()
+    rec = recorder.Recorder(mic_wav, sys_wav)
     try:
         rec.start()
     except Exception as e:
@@ -62,19 +63,12 @@ def main():
             break
 
     try:
-        # Hard stop: grab the frames without any native PortAudio teardown
+        # Hard stop: stop capture without any native PortAudio teardown
         # (no stream.close(), no Pa_Terminate). Those teardown calls are what
         # can segfault a process that opened a WASAPI loopback stream; we
-        # hard-exit below instead and let the OS reclaim the device.
-        result = rec.stop_hard()
-        duration = result.get("duration", 0)
-
-        # Save each raw stream at its own native rate/channels using stdlib
-        # `wave`. No resampling or mixing happens in this (poisoned) process.
-        mic, sysd = result["mic"], result["sys"]
-        recorder.save_wav(mic_wav, mic["frames"], mic["channels"], mic["rate"])
-        recorder.save_wav(sys_wav, sysd["frames"], sysd["channels"], sysd["rate"])
-
+        # hard-exit below instead and let the OS reclaim the device. The .wav
+        # files were written continuously and are finalised by stop_hard().
+        duration = rec.stop_hard()
         print("OK %.1f" % duration, flush=True)
         return 0
     except Exception as e:

@@ -25,12 +25,14 @@ import os
 import re
 import csv
 import sys
+import threading
 import subprocess
 from datetime import datetime
 
 from yapyapyap import config
 from yapyapyap.core import summarize
 from yapyapyap.managers import ollama_manager as om
+from yapyapyap.managers import whisper_manager as wm
 
 # The heavy lifting runs in short-lived subprocesses, launched as modules
 # (`python -m yapyapyap.workers.<name>`) so they import cleanly as part of the
@@ -38,6 +40,7 @@ from yapyapyap.managers import ollama_manager as om
 # when the app is run uninstalled from the project root.
 _RECORDER_WORKER = "yapyapyap.workers.recorder_worker"
 _PROCESS_WORKER = "yapyapyap.workers.process_worker"
+_LIVE_WORKER = "yapyapyap.workers.live_worker"
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
@@ -48,6 +51,21 @@ def _worker_env():
     env["PYTHONPATH"] = (config.SRC_ROOT + os.pathsep + existing
                          if existing else config.SRC_ROOT)
     return env
+
+
+def _live_model():
+    """The model to use for LIVE captions: the smallest one already downloaded
+    (live wants speed; the final pass on Stop uses the configured model for
+    accuracy). Returns None if no model is downloaded, in which case live
+    captions are skipped rather than triggering a surprise download."""
+    try:
+        have = set(wm.downloaded_sizes())
+    except Exception:
+        have = set()
+    for size in config.WHISPER_MODELS:  # smallest -> largest
+        if size in have:
+            return size
+    return None
 
 
 class EngineError(RuntimeError):
@@ -190,8 +208,11 @@ def write_notes_txt(stamp, project, notes, title, dest_dir):
 class RecordingSession:
     """Drives one record -> transcribe cycle via subprocesses."""
 
-    def __init__(self, project=None):
+    def __init__(self, project=None, on_live=None):
         self.project = project
+        # on_live(kind, value): "caption" with a transcript line, or "fallback"
+        # when live captioning gave up (machine can't keep up). Optional.
+        self.on_live = on_live
         os.makedirs(config.RECORDINGS_DIR, exist_ok=True)
         os.makedirs(config.TRANSCRIPTS_DIR, exist_ok=True)
         self.stamp, self.base = _new_base(project)
@@ -199,6 +220,8 @@ class RecordingSession:
         self._mic_wav = self.base + ".mic.wav"
         self._sys_wav = self.base + ".sys.wav"
         self._proc = None
+        self._live_proc = None
+        self._live_thread = None
 
     # ---------------------------------------------------------------- record
     def start(self):
@@ -212,6 +235,73 @@ class RecordingSession:
         if line.strip() != "READY":
             err = self._proc.stderr.read() if self._proc.stderr else ""
             raise EngineError("Recorder failed to start.\n" + err.strip())
+        self._start_live()
+
+    # --------------------------------------------------------- live captions
+    def _start_live(self):
+        """Start the optional live transcriber. Best-effort: any failure just
+        means no live captions — recording and the final transcript are
+        unaffected."""
+        if self.on_live is None:
+            return
+        model = _live_model()
+        if not model:
+            return  # nothing downloaded yet; don't trigger a surprise download
+        try:
+            self._live_proc = subprocess.Popen(
+                [sys.executable, "-m", _LIVE_WORKER, self._mic_wav,
+                 self._sys_wav, model],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, text=True,
+                creationflags=_NO_WINDOW, env=_worker_env(),
+            )
+        except Exception:
+            self._live_proc = None
+            return
+        self._live_thread = threading.Thread(target=self._pump_live, daemon=True)
+        self._live_thread.start()
+
+    def _pump_live(self):
+        proc = self._live_proc
+        if not proc or not proc.stdout:
+            return
+        for raw in proc.stdout:
+            line = raw.rstrip("\r\n")
+            if line.startswith("@SEG "):
+                _, _, val = line.partition(" ")
+                _end, _, text = val.partition("\t")
+                if self.on_live:
+                    try:
+                        self.on_live("caption", text)
+                    except Exception:
+                        pass
+            elif line.startswith("@FALLBACK"):
+                if self.on_live:
+                    try:
+                        self.on_live("fallback", "")
+                    except Exception:
+                        pass
+
+    def _stop_live(self):
+        proc, self._live_proc = self._live_proc, None
+        if not proc:
+            return
+        try:
+            if proc.poll() is None:
+                try:
+                    proc.stdin.write("stop\n")
+                    proc.stdin.flush()
+                except (BrokenPipeError, OSError):
+                    pass
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
     def stop(self, model_size=None, progress=None):
         """
@@ -232,6 +322,7 @@ class RecordingSession:
                     pass
 
         _emit("step", "Saving the recording")
+        self._stop_live()  # end live captions; the final pass below is authoritative
         try:
             self._proc.stdin.write("stop\n")
             self._proc.stdin.flush()
@@ -269,51 +360,13 @@ class RecordingSession:
         }
 
     def _run_transcription(self, model_size, transcript_path, emit):
-        """Launch process_worker and stream its progress events to `emit`.
-        Returns the final transcript text (authoritative, read from file)."""
-        proc = subprocess.Popen(
-            [sys.executable, "-m", _PROCESS_WORKER, self._mic_wav, self._sys_wav,
-             self.wav, model_size, transcript_path],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            creationflags=_NO_WINDOW, env=_worker_env(),
-        )
-        total = 0.0
-        log_tail = []
-        for raw in proc.stdout:
-            line = raw.rstrip("\r\n")
-            if not line.startswith("@"):
-                if line.strip():
-                    log_tail.append(line)
-                    del log_tail[:-20]
-                continue
-            tag, _, val = line[1:].partition(" ")
-            if tag == "STEP":
-                emit("step", val)
-            elif tag == "DUR":
-                try:
-                    total = float(val)
-                except ValueError:
-                    total = 0.0
-                emit("dur", total)
-            elif tag == "SEG":
-                end_s, _, text = val.partition("\t")
-                try:
-                    frac = (float(end_s) / total) if total > 0 else 0.0
-                except ValueError:
-                    frac = 0.0
-                emit("seg", (max(0.0, min(frac, 1.0)), text))
-        proc.wait()
-        if proc.returncode != 0:
-            raise EngineError("Transcription failed (exit %s).\n%s"
-                              % (proc.returncode, "\n".join(log_tail).strip()))
-        try:
-            with open(transcript_path, encoding="utf-8") as f:
-                return f.read().strip()
-        except OSError:
-            return ""
+        """Mix + transcribe this session's stems, streaming progress to `emit`."""
+        return _run_process_worker(self._mic_wav, self._sys_wav, self.wav,
+                                   model_size, transcript_path, emit)
 
     def cancel(self):
         """Abort a recording without transcribing (best effort)."""
+        self._stop_live()
         if self._proc and self._proc.poll() is None:
             try:
                 self._proc.stdin.write("stop\n")
@@ -337,6 +390,152 @@ class RecordingSession:
                                      _copy_dir(self.project))
         except Exception:
             pass  # non-fatal
+
+
+# --------------------------------------------------------------------------
+# Mixing + transcription (shared by live recording and crash recovery)
+# --------------------------------------------------------------------------
+def _run_process_worker(mic_wav, sys_wav, out_wav, model_size, transcript_path,
+                        emit):
+    """Launch process_worker on a pair of raw stems and stream its progress
+    events to `emit`. Returns the final transcript text (authoritative, read
+    back from `transcript_path`)."""
+    proc = subprocess.Popen(
+        [sys.executable, "-m", _PROCESS_WORKER, mic_wav, sys_wav,
+         out_wav, model_size, transcript_path],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        creationflags=_NO_WINDOW, env=_worker_env(),
+    )
+    total = 0.0
+    log_tail = []
+    for raw in proc.stdout:
+        line = raw.rstrip("\r\n")
+        if not line.startswith("@"):
+            if line.strip():
+                log_tail.append(line)
+                del log_tail[:-20]
+            continue
+        tag, _, val = line[1:].partition(" ")
+        if tag == "STEP":
+            emit("step", val)
+        elif tag == "DUR":
+            try:
+                total = float(val)
+            except ValueError:
+                total = 0.0
+            emit("dur", total)
+        elif tag == "SEG":
+            end_s, _, text = val.partition("\t")
+            try:
+                frac = (float(end_s) / total) if total > 0 else 0.0
+            except ValueError:
+                frac = 0.0
+            emit("seg", (max(0.0, min(frac, 1.0)), text))
+    proc.wait()
+    if proc.returncode != 0:
+        raise EngineError("Transcription failed (exit %s).\n%s"
+                          % (proc.returncode, "\n".join(log_tail).strip()))
+    try:
+        with open(transcript_path, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+# --------------------------------------------------------------------------
+# Crash recovery
+# --------------------------------------------------------------------------
+# Because audio is streamed straight to .mic.wav / .sys.wav as it's captured, a
+# crash or power-loss mid-meeting leaves those raw stems on disk but no
+# transcript. On the next launch we can finish the job: mix + transcribe the
+# orphaned stems into a normal conversation.
+_MIC_SUFFIX = ".mic.wav"
+_SYS_SUFFIX = ".sys.wav"
+
+
+def find_interrupted():
+    """Return [{base, stamp, project, size, mtime}] for recordings whose raw
+    stems survived a previous run but were never transcribed. Newest last."""
+    out = []
+    rec_dir = config.RECORDINGS_DIR
+    try:
+        names = os.listdir(rec_dir)
+    except OSError:
+        return out
+    seen = set()
+    for n in names:
+        suf = _MIC_SUFFIX if n.endswith(_MIC_SUFFIX) else (
+            _SYS_SUFFIX if n.endswith(_SYS_SUFFIX) else None)
+        if not suf:
+            continue
+        base = os.path.join(rec_dir, n[: -len(suf)])
+        if base in seen:
+            continue
+        seen.add(base)
+        # A finished conversation has a transcript; if there's none, the stems
+        # are from an interrupted run and can be recovered.
+        if os.path.exists(base + "_transcript.txt"):
+            continue
+        stems = [base + s for s in (_MIC_SUFFIX, _SYS_SUFFIX)
+                 if os.path.exists(base + s)]
+        if not stems:
+            continue
+        try:
+            size = sum(os.path.getsize(p) for p in stems)
+            mtime = max(os.path.getmtime(p) for p in stems)
+        except OSError:
+            size, mtime = 0, 0
+        # Bytes -> rough seconds (16-bit mono @16k is the floor; real stems are
+        # bigger, so this is a conservative lower bound just for display).
+        out.append({"base": base, "stamp": parse_base(base)[0],
+                    "project": resolve_project(base), "size": size,
+                    "mtime": mtime})
+    out.sort(key=lambda d: d["mtime"])
+    return out
+
+
+def recover(base, model_size=None, progress=None):
+    """Finish an interrupted recording: mix + transcribe its orphaned stems into
+    a normal conversation, then clean the stems up. Returns the same dict shape
+    as RecordingSession.stop()."""
+    model_size = model_size or config.WHISPER_MODEL
+    mic_wav, sys_wav = base + _MIC_SUFFIX, base + _SYS_SUFFIX
+    wav = base + ".wav"
+    transcript_path = base + "_transcript.txt"
+    project = resolve_project(base)
+    stamp, _ = parse_base(base)
+
+    def _emit(kind, value=""):
+        if progress:
+            try:
+                progress(kind, value)
+            except Exception:
+                pass
+
+    transcript = _run_process_worker(mic_wav, sys_wav, wav, model_size,
+                                     transcript_path, _emit)
+    for p in (mic_wav, sys_wav):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    try:
+        if transcript.strip():
+            write_transcript_csv(stamp, project, transcript, _copy_dir(project))
+    except Exception:
+        pass  # non-fatal
+    _emit("done", "")
+    return {"base": base, "wav": wav, "transcript_path": transcript_path,
+            "transcript": transcript, "duration": 0.0, "project": project}
+
+
+def discard_interrupted(base):
+    """Throw away an interrupted recording's leftover files."""
+    for s in (_MIC_SUFFIX, _SYS_SUFFIX, ".wav"):
+        try:
+            os.remove(base + s)
+        except OSError:
+            pass
 
 
 # --------------------------------------------------------------------------
@@ -410,10 +609,21 @@ def generate_notes(base, on_token=None, model=None, prompt=None):
         if not is_too_short(transcript):
             project = resolve_project(base)
             stamp, _ = parse_base(base)
-            title = summarize.short_title(transcript, model=config.SUMMARY_MODEL)
+            # If the user renamed this conversation, keep their title; otherwise
+            # let the model name it.
+            if os.path.exists(base + ".titlelock"):
+                try:
+                    with open(base + "_title.txt", encoding="utf-8") as f:
+                        title = f.read().strip() or "notes"
+                except OSError:
+                    title = summarize.short_title(transcript,
+                                                  model=config.SUMMARY_MODEL)
+            else:
+                title = summarize.short_title(transcript,
+                                              model=config.SUMMARY_MODEL)
+                with open(base + "_title.txt", "w", encoding="utf-8") as f:
+                    f.write(title)
             write_notes_txt(stamp, project, notes, title, _copy_dir(project))
-            with open(base + "_title.txt", "w", encoding="utf-8") as f:
-                f.write(title)
     except Exception:
         pass  # non-fatal
 

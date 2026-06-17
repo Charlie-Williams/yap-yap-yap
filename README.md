@@ -246,9 +246,10 @@ yapyapyap/                     the application package
     floating.py                the draggable, always-on-top recording indicator (the bird)
     settings_window.py         the Settings dialog (cog icon)
 
-  workers/                     short-lived subprocesses (see below)
-    recorder_worker.py         records mic + system audio, saves raw stems
+  workers/                     subprocesses (see below)
+    recorder_worker.py         streams mic + system audio to disk as it records
     process_worker.py          mixes the stems + transcribes with faster-whisper
+    live_worker.py             live captions while recording (auto-fallback)
     whisper_dl_worker.py       downloads a Whisper model in a subprocess
 
   tools/
@@ -266,9 +267,29 @@ or even just spawning a subprocess from it - crashes with a hard native segfault
 and no Python error. (That was the old "crash when I press Stop" bug.)
 
 The fix is strict process isolation: the app's window process never opens an
-audio stream or loads Whisper itself. It launches short-lived worker
-subprocesses for recording and for transcription, so the two native runtimes are
-never in the same process and can't collide.
+audio stream or loads Whisper itself. It launches worker subprocesses for
+recording and for transcription, so the two native runtimes are never in the
+same process and can't collide.
+
+### Never losing a recording
+
+Audio is **streamed straight to disk as it's captured** (never buffered in
+memory), so memory stays flat no matter how long the meeting runs, and a partial
+recording always survives. Each stream's `.wav` header is re-flushed and fsync'd
+every few seconds (a checkpoint), so even a crash or power-loss leaves a valid,
+playable file — losing at most a couple of seconds. On the next launch the app
+notices any recording a previous session was cut off on and offers to finish
+transcribing it (see `engine.find_interrupted` / `recover`).
+
+### Live captions while recording
+
+`live_worker.py` is a long-lived process that loads Whisper once and transcribes
+the growing audio on disk in near-real-time, so captions appear as people speak.
+It uses the smallest downloaded model for speed; when you press Stop a single
+clean pass over the whole recording produces the authoritative transcript. If the
+machine can't keep up (it measures its own real-time factor), it prints
+`@FALLBACK`, the live captions pause, and you simply get the full transcript on
+Stop — the recording itself is never affected.
 
 macOS (CoreAudio) doesn't suffer that particular segfault, but the app keeps the
 exact same process-isolation architecture on every platform - it's robust, keeps

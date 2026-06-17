@@ -58,6 +58,28 @@ def _resample(audio, orig_rate):
     return resample_poly(audio, up, down).astype(np.float32)
 
 
+def pcm_to_16k_mono(frames, rate, channels):
+    """Convert a raw int16 PCM byte slice to a float32 mono array at 16 kHz.
+    Used by the live transcriber to process short windows of the growing
+    streams without going through the full mix_streams() path."""
+    return _resample(_bytes_to_mono_float(frames, channels), rate)
+
+
+def mix_two(mic_audio, sys_audio):
+    """Sum two already-16 kHz-mono float arrays (length-aligned), guarding
+    against clipping. Returns a float32 mono array."""
+    n = max(len(mic_audio), len(sys_audio))
+    if n == 0:
+        return np.zeros(0, dtype=np.float32)
+    mic_audio = np.pad(mic_audio, (0, n - len(mic_audio)))
+    sys_audio = np.pad(sys_audio, (0, n - len(sys_audio)))
+    mixed = mic_audio + sys_audio
+    peak = np.max(np.abs(mixed)) if len(mixed) else 0.0
+    if peak > 1.0:
+        mixed = mixed / peak
+    return mixed.astype(np.float32)
+
+
 def mix_streams(recording):
     """
     recording: the dict returned by Recorder.stop().

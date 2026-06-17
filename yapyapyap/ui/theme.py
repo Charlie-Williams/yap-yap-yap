@@ -118,6 +118,34 @@ PRIMARY_TEXT = INK
 # Wordmark tri-tone.
 WORDMARK = (INK, "#6B5E3A", INK)
 
+# Discrete palette offered when colour-coding a project. The first is the
+# default (matches the old amber swatch).
+PROJECT_COLORS = [
+    "#B8860B",  # amber (default)
+    "#E5484D",  # red
+    "#E5793A",  # orange
+    "#1E9E57",  # green
+    "#2A8FBD",  # blue
+    "#5B5BD6",  # indigo
+    "#9333A8",  # purple
+    "#C2298A",  # pink
+]
+PROJECT_COLOR_DEFAULT = PROJECT_COLORS[0]
+
+
+def color_for_project(project):
+    """The swatch colour for a project dict. Uses the stored colour, else a
+    stable colour derived from the name, else the default."""
+    if not project:
+        return PROJECT_COLOR_DEFAULT
+    c = project.get("color")
+    if c:
+        return c
+    name = (project.get("name") or "").strip()
+    if not name:
+        return PROJECT_COLOR_DEFAULT
+    return PROJECT_COLORS[sum(ord(ch) for ch in name) % len(PROJECT_COLORS)]
+
 
 # --- Fonts --------------------------------------------------------------
 # PRD sizes are px; Tk takes points (px * 0.75 at 96 dpi) - sizes below are pt.

@@ -29,14 +29,20 @@ TABS = ("General", "AI Models", "AI Notes", "Projects")
 
 
 class SettingsWindow(tk.Toplevel):
-    def __init__(self, parent, on_saved=None, initial_tab=None):
+    def __init__(self, parent, on_saved=None, initial_tab=None,
+                 on_bg_download=None):
         super().__init__(parent)
         self.on_saved = on_saved
+        # on_bg_download(active: bool, label: str): lets the main window show a
+        # banner when a model keeps downloading after Settings is closed.
+        self.on_bg_download = on_bg_download
+        self._closed = False
         self.title("Settings")
         self.configure(bg=T.SURFACE)
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._close)
 
         # Read the live, resolved values (folders show their real on-disk path).
         self.v_model = tk.StringVar(value=config.WHISPER_MODEL)
@@ -84,7 +90,7 @@ class SettingsWindow(tk.Toplevel):
         btns = tk.Frame(footer, bg=T.SURFACE)
         btns.pack(fill="x", padx=22, pady=12)
         T.AccentButton(btns, "Save", self._save, bg=T.SURFACE).pack(side="right")
-        T.GhostButton(btns, "Cancel", self.destroy, bg=T.SURFACE).pack(
+        T.GhostButton(btns, "Cancel", self._close, bg=T.SURFACE).pack(
             side="right", padx=(0, 10))
 
         self._body = tk.Frame(self, bg=T.SURFACE)
@@ -389,10 +395,7 @@ class SettingsWindow(tk.Toplevel):
             err = None
         except Exception as e:
             err = str(e)
-        try:
-            self.after(0, lambda: self._dl_done(("whisper", size), err))
-        except Exception:
-            pass
+        self._finish_dl(("whisper", size), err)
 
     def _download_ollama(self, tag):
         if self._downloading:
@@ -407,10 +410,48 @@ class SettingsWindow(tk.Toplevel):
             err = None
         except Exception as e:
             err = str(e)
+        self._finish_dl(("ollama", tag), err)
+
+    def _finish_dl(self, key, err):
+        """Called on the download thread when a download ends. If Settings is
+        still open, update it; if it was closed mid-download, just clear the
+        main-window background banner."""
+        if self._closed:
+            if self.on_bg_download:
+                try:
+                    self.on_bg_download(False, self._dl_label(key))
+                except Exception:
+                    pass
+            return
         try:
-            self.after(0, lambda: self._dl_done(("ollama", tag), err))
+            self.after(0, lambda: self._dl_done(key, err))
         except Exception:
             pass
+
+    def _dl_label(self, key):
+        kind, ident = key
+        if kind == "whisper":
+            return next((m["label"] for m in wm.CATALOG if m["size"] == ident),
+                        ident)
+        return ident
+
+    def _close(self):
+        """Close Settings. If a model is still downloading, reassure the user it
+        continues in the background and hand a banner to the main window."""
+        if self._downloading and self.on_bg_download:
+            from tkinter import messagebox
+            label = self._dl_label(self._downloading)
+            messagebox.showinfo(
+                "Still downloading",
+                f"“{label}” is still downloading.\n\nIt will keep "
+                "downloading in the background — you can close Settings and "
+                "carry on. You'll see when it finishes on the main window.")
+            try:
+                self.on_bg_download(True, label)
+            except Exception:
+                pass
+        self._closed = True
+        self.destroy()
 
     def _progress(self, frac, status):
         if frac is not None:
@@ -508,6 +549,7 @@ class SettingsWindow(tk.Toplevel):
 
         v_name = tk.StringVar(value=proj.get("name", ""))
         v_path = tk.StringVar(value=proj.get("path", ""))
+        v_color = tk.StringVar(value=proj.get("color") or T.PROJECT_COLOR_DEFAULT)
 
         top = tk.Frame(inner, bg=T.WHITE)
         top.pack(fill="x")
@@ -517,6 +559,34 @@ class SettingsWindow(tk.Toplevel):
         rm = tk.Label(top, text="Remove", bg=T.WHITE, fg=T.RECORD,
                       font=T.semi(9), cursor="hand2")
         rm.pack(side="right")
+
+        # Colour picker — the chosen colour is the project's dot in the menus.
+        crow = tk.Frame(inner, bg=T.WHITE)
+        crow.pack(fill="x", pady=(8, 0))
+        tk.Label(crow, text="Colour", bg=T.WHITE, fg=T.MUTED, width=6,
+                 anchor="w", font=T.font(9)).pack(side="left")
+        swatches = tk.Frame(crow, bg=T.WHITE)
+        swatches.pack(side="left", padx=(6, 0))
+        canvases = []
+
+        def _redraw_swatches(v=v_color, items=canvases):
+            for c, col in items:
+                try:
+                    c.delete("all")
+                    if col == v.get():
+                        c.create_oval(1, 1, 21, 21, outline=T.INK, width=2)
+                    c.create_oval(5, 5, 17, 17, fill=col, outline=col)
+                except tk.TclError:
+                    pass
+
+        for col in T.PROJECT_COLORS:
+            c = tk.Canvas(swatches, width=23, height=23, bg=T.WHITE,
+                          highlightthickness=0, bd=0, cursor="hand2")
+            c.pack(side="left", padx=2)
+            c.bind("<Button-1>",
+                   lambda e, col=col: (v_color.set(col), _redraw_swatches()))
+            canvases.append((c, col))
+        _redraw_swatches()
 
         bottom = tk.Frame(inner, bg=T.WHITE)
         bottom.pack(fill="x", pady=(8, 0))
@@ -531,7 +601,7 @@ class SettingsWindow(tk.Toplevel):
                 v_path.set(chosen)
         T.GhostButton(bottom, "Browse", browse, bg=T.WHITE).pack(side="left")
 
-        entry = {"frame": row, "name": v_name, "path": v_path}
+        entry = {"frame": row, "name": v_name, "path": v_path, "color": v_color}
         self._proj_rows.append(entry)
         rm.bind("<Button-1>", lambda e, en=entry: self._remove_project_row(en))
 
@@ -566,7 +636,8 @@ class SettingsWindow(tk.Toplevel):
             name = r["name"].get().strip()
             if not name:
                 continue
-            projects.append({"name": name, "path": r["path"].get().strip()})
+            projects.append({"name": name, "path": r["path"].get().strip(),
+                             "color": r["color"].get()})
 
         # Blank folder fields fall back to the portable built-in defaults.
         config.save_settings({
@@ -579,6 +650,14 @@ class SettingsWindow(tk.Toplevel):
         })
         if self.on_saved:
             self.on_saved()
+        # If a model is still downloading, let it finish in the background and
+        # hand its progress banner to the main window.
+        if self._downloading and self.on_bg_download:
+            try:
+                self.on_bg_download(True, self._dl_label(self._downloading))
+            except Exception:
+                pass
+        self._closed = True
         self.destroy()
 
     def _center_on(self, parent):

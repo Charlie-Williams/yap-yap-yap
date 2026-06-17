@@ -28,7 +28,7 @@ from datetime import datetime
 
 import tkinter as tk
 import tkinter.font as tkfont
-from tkinter import messagebox
+from tkinter import messagebox, simpledialog
 
 from yapyapyap import config
 from yapyapyap import applog
@@ -427,6 +427,10 @@ class App:
         # First-run: quietly fetch the smallest models so it works out of the box.
         threading.Thread(target=self._first_run_setup, daemon=True).start()
 
+        # Offer to finish any recording a previous session was interrupted on.
+        self._recover_queue = []
+        root.after(700, self._check_interrupted)
+
     # ---- floating recording indicator -------------------------------
     def _on_unmap(self, event):
         if event.widget is self.root:
@@ -729,7 +733,8 @@ class App:
             if n == cur:
                 pop.item(n, lambda v=n: self._pick_project(v), selected=True)
             else:
-                pop.item(n, lambda v=n: self._pick_project(v), swatch=T.AMBER)
+                pop.item(n, lambda v=n: self._pick_project(v),
+                         swatch=T.color_for_project(p))
         pop.separator()
         pop.item("＋  Manage projects…",
                  lambda: self.open_settings(initial_tab="Projects"))
@@ -768,7 +773,7 @@ class App:
                 continue
             item = NavItem(self._proj_holder, None, n,
                            lambda v=n: self._set_nav(v), indent=22,
-                           swatch=T.AMBER)
+                           swatch=T.color_for_project(p))
             item.pack(pady=1)
             self._proj_items[n] = item
         self._update_nav_active()
@@ -971,10 +976,10 @@ class App:
     def _show_recording_view(self):
         self._update_topbar()
         area = self._state_area()
-        inner = tk.Frame(area, bg=T.PAPER)
-        inner.place(relx=0.5, rely=0.44, anchor="center")
+        hero = tk.Frame(area, bg=T.PAPER)
+        hero.pack(pady=(34, 8))
 
-        pill = tk.Canvas(inner, width=86, height=30, bg=T.PAPER,
+        pill = tk.Canvas(hero, width=86, height=30, bg=T.PAPER,
                          highlightthickness=0, bd=0)
         pill.pack()
         T.round_rect(pill, 1, 1, 85, 29, 14, fill="#FCE9EA",
@@ -984,20 +989,18 @@ class App:
         pill.create_text(52, 15, text="REC", fill=T.RECORD, font=T.bold(9))
         self._rec_pill = pill
 
-        self._hero_timer = tk.Label(inner, text="00:00", bg=T.PAPER, fg=T.INK,
+        self._hero_timer = tk.Label(hero, text="00:00", bg=T.PAPER, fg=T.INK,
                                     font=T.head(44))
         self._hero_timer.pack(pady=(10, 6))
 
-        self._wave = tk.Canvas(inner, width=336, height=44, bg=T.PAPER,
+        self._wave = tk.Canvas(hero, width=336, height=44, bg=T.PAPER,
                                highlightthickness=0, bd=0)
-        self._wave.pack(pady=(2, 14))
+        self._wave.pack(pady=(2, 12))
         import random
         self._wave_h = [random.randint(6, 38) for _ in range(42)]
 
-        tk.Label(inner, text="Listening to your microphone and this PC's audio",
-                 bg=T.PAPER, fg=T.MUTED, font=T.font(10)).pack()
-        chips = tk.Frame(inner, bg=T.PAPER)
-        chips.pack(pady=(10, 0))
+        chips = tk.Frame(hero, bg=T.PAPER)
+        chips.pack()
         for label in ("Microphone", "System audio"):
             f = tkfont.Font(family=T.UI_SEMI, size=9)
             w = f.measure(label) + 38
@@ -1009,7 +1012,74 @@ class App:
             c.create_oval(12, 10, 18, 16, fill=T.GREEN, outline=T.GREEN)
             c.create_text(26, 13, text=label, anchor="w", fill=T.INK_SOFT,
                           font=T.semi(9))
+
+        # Live transcript panel — fills the space below the hero.
+        caps = tk.Frame(area, bg=T.PAPER)
+        caps.pack(fill="both", expand=True, padx=48, pady=(8, 26))
+        tk.Label(caps, text="LIVE TRANSCRIPT", bg=T.PAPER, fg=T.SUBTLE,
+                 font=T.semi(8), anchor="w").pack(fill="x", pady=(0, 4))
+        self._live_caps = tk.Text(caps, wrap="word", bg=T.PAPER, fg=T.INK_SOFT,
+                                  bd=0, highlightthickness=0, font=T.font(11),
+                                  padx=2, pady=2, spacing1=2, spacing3=6,
+                                  cursor="arrow")
+        self._live_caps.pack(fill="both", expand=True)
+        self._live_caps.tag_configure("capts", foreground=T.AMBER,
+                                      font=T.semi(10))
+        self._live_caps.tag_configure("cap", foreground=T.INK_SOFT,
+                                      font=T.font(11))
+        self._live_caps.tag_configure("capnote", foreground=T.MUTED,
+                                      font=T.font(10), justify="left")
+        self._live_caps.tag_configure("capwait", foreground=T.SUBTLE,
+                                      font=T.font(10))
+        self._live_caps.insert(
+            "end", "Captions will appear here as people speak…", "capwait")
+        self._live_caps.configure(state="disabled")
+        self._caps_started = False
+
         self._animate_wave()
+
+    def _append_caption(self, line):
+        v = getattr(self, "_live_caps", None)
+        if not v:
+            return
+        try:
+            v.configure(state="normal")
+            if not self._caps_started:
+                v.delete("1.0", "end")
+                self._caps_started = True
+            m = self._TS_RE.match((line or "").strip())
+            if m:
+                ts, text = m.groups()
+                v.insert("end", ts + "  ", "capts")
+                v.insert("end", text + "\n", "cap")
+            else:
+                v.insert("end", (line or "").strip() + "\n", "cap")
+            v.see("end")
+            v.configure(state="disabled")
+        except tk.TclError:
+            pass
+
+    def _live_fallback(self):
+        v = getattr(self, "_live_caps", None)
+        if not v:
+            return
+        try:
+            v.configure(state="normal")
+            if not self._caps_started:
+                v.delete("1.0", "end")
+                self._caps_started = True
+                v.insert("end", "Live captions aren't keeping up on this "
+                         "computer, so they're paused.\nYou'll get the full, "
+                         "accurate transcript the moment you press Stop.",
+                         "capnote")
+            else:
+                v.insert("end", "\n(Live captions paused — this computer can't "
+                         "keep up. The full transcript follows on Stop.)\n",
+                         "capnote")
+            v.see("end")
+            v.configure(state="disabled")
+        except tk.TclError:
+            pass
 
     def _animate_wave(self):
         if self.state != "recording" or not getattr(self, "_wave", None):
@@ -1280,10 +1350,12 @@ class App:
                                   prompt=config.SUMMARY_PROMPT)
             self.root.after(0, lambda: self._on_notes_done(base))
         except summarize.SummarizeError as e:
-            self.root.after(0, lambda: self._on_notes_error(str(e)))
+            msg = str(e)
+            self.root.after(0, lambda: self._on_notes_error(msg))
         except Exception as e:
             log.exception("Notes generation failed")
-            self.root.after(0, lambda: self._on_notes_error(str(e)))
+            msg = str(e)
+            self.root.after(0, lambda: self._on_notes_error(msg))
 
     def _on_notes_token(self, chunk):
         self.root.after(0, lambda: self._append_notes_token(chunk))
@@ -1458,7 +1530,21 @@ class App:
 
     def open_settings(self, initial_tab=None):
         SettingsWindow(self.root, on_saved=self._on_settings_saved,
-                       initial_tab=initial_tab)
+                       initial_tab=initial_tab,
+                       on_bg_download=self._on_bg_download)
+
+    def _on_bg_download(self, active, label):
+        """Settings was closed while a model was still downloading — show (or
+        clear) a banner on the main window. Safe to call from any thread."""
+        text = (f"Downloading {label} in the background — you can keep working…"
+                if active else None)
+        self._banner_async(text)
+        if not active:
+            # Finished: refresh anything that depended on the new model.
+            try:
+                self.root.after(0, self._on_settings_saved)
+            except tk.TclError:
+                pass
 
     def _on_settings_saved(self):
         os.makedirs(config.RECORDINGS_DIR, exist_ok=True)
@@ -1500,9 +1586,23 @@ class App:
     # ---- recording lifecycle (start is async so the UI never freezes) ----
     def start_recording(self):
         log.info("Starting recording...")
-        self.session = engine.RecordingSession(project=self._selected_project())
+        self.session = engine.RecordingSession(
+            project=self._selected_project(), on_live=self._on_live_event)
         self._set_state("starting")
         threading.Thread(target=self._do_start, daemon=True).start()
+
+    # ---- live captions during recording ----
+    def _on_live_event(self, kind, value):
+        # Called from the session's background pump thread - marshal to the UI.
+        self.root.after(0, lambda: self._apply_live_event(kind, value))
+
+    def _apply_live_event(self, kind, value):
+        if self.state not in ("recording", "starting"):
+            return
+        if kind == "caption":
+            self._append_caption(value)
+        elif kind == "fallback":
+            self._live_fallback()
 
     def _do_start(self):
         try:
@@ -1563,6 +1663,74 @@ class App:
             self._select_base(self._conv_selected)
         else:
             self._show_placeholder()
+
+    # ---- crash recovery (finish recordings a previous run was cut off on) ----
+    def _check_interrupted(self):
+        try:
+            self._recover_queue = engine.find_interrupted()
+        except Exception:
+            log.exception("Scan for interrupted recordings failed")
+            self._recover_queue = []
+        self._prompt_next_recovery()
+
+    def _prompt_next_recovery(self):
+        if self.state != "idle" or not self._recover_queue:
+            return
+        item = self._recover_queue[0]
+        proj = (item.get("project") or {}).get("name")
+        where = f"\n\nProject: {proj}" if proj else ""
+        if messagebox.askyesno(
+                config.APP_NAME,
+                "An unfinished recording from a previous session was found — it "
+                "looks like YapYapYap closed before it could be transcribed.\n\n"
+                "The audio was saved safely. Finish transcribing it now?" + where):
+            self._recover_queue.pop(0)
+            self._start_recovery(item["base"])
+            return
+        # Not now: keep it for next launch, or offer to throw it away.
+        if messagebox.askyesno(
+                config.APP_NAME,
+                "Keep this unfinished recording for later?\n\n"
+                "Yes — keep it (you'll be asked again next time).\n"
+                "No — delete the audio permanently."):
+            self._recover_queue.pop(0)
+        else:
+            engine.discard_interrupted(item["base"])
+            self._recover_queue.pop(0)
+        self.refresh_list()
+        self._prompt_next_recovery()
+
+    def _start_recovery(self, base):
+        log.info("Recovering interrupted recording: %s", base)
+        self._set_state("processing")
+        self._sub_set("Recovering…", T.AMBER, dot=T.AMBER)
+        threading.Thread(target=self._do_recover, args=(base,), daemon=True).start()
+
+    def _do_recover(self, base):
+        try:
+            result = engine.recover(base, model_size=config.WHISPER_MODEL,
+                                    progress=self.progress)
+            self.root.after(0, lambda: self._on_recovered(result["base"]))
+        except Exception as e:
+            log.exception("Recovery failed")
+            msg = str(e)
+            self.root.after(0, lambda: self._on_recover_error(base, msg))
+
+    def _on_recovered(self, base):
+        self._set_state("idle")
+        self._toast("Recording recovered", T.GREEN, dot=T.GREEN)
+        self.refresh_list()
+        self._select_base(base)
+        self.root.after(400, self._prompt_next_recovery)
+
+    def _on_recover_error(self, base, msg):
+        self._set_state("idle")
+        self._restore_reader()
+        messagebox.showerror(
+            config.APP_NAME,
+            f"Couldn't recover that recording:\n\n{msg}\n\n"
+            "The audio is still saved; you can try again next launch.")
+        self.root.after(400, self._prompt_next_recovery)
 
     # ----------------------------------------------------- list + viewer
     def _filtered_items(self):
@@ -1689,7 +1857,7 @@ class App:
 
     # ---- per-conversation "..." menu --------------------------------
     _CONV_SUFFIXES = (".wav", "_transcript.txt", "_notes.md", "_title.txt",
-                      ".mic.wav", ".sys.wav", ".hidden")
+                      ".titlelock", ".mic.wav", ".sys.wav", ".hidden")
 
     def _conv_menu(self, base, event):
         if self._generating or self.state in ("processing", "starting", "recording"):
@@ -1705,9 +1873,10 @@ class App:
                 continue
             sel = engine.project_tag(p) == cur
             pop.item(nm, lambda n=nm: self._assign_project(base, n),
-                     selected=sel, swatch=None if sel else T.AMBER)
+                     selected=sel,
+                     swatch=None if sel else T.color_for_project(p))
         pop.separator()
-        pop.item("Hide from list", lambda: self._hide_conv(base))
+        pop.item("Rename", lambda: self._rename_conv(base))
         pop.item("Delete from computer", lambda: self._delete_conv(base),
                  danger=True)
         pop.open(event.x_root - 10, event.y_root + 8)
@@ -1732,13 +1901,37 @@ class App:
         self._select_base(new_base)
         self._toast("Project updated", T.GREEN, dot=T.GREEN)
 
-    def _hide_conv(self, base):
+    def _rename_conv(self, base):
+        item = self._items_by_base.get(base) if hasattr(self, "_items_by_base") else None
+        current = (item and item.get("title")) or ""
+        new = simpledialog.askstring(
+            "Rename conversation", "Name for this conversation:",
+            initialvalue=current, parent=self.root)
+        if new is None:
+            return  # cancelled
+        new = new.strip()
         try:
-            open(base + ".hidden", "w").close()
+            if new:
+                with open(base + "_title.txt", "w", encoding="utf-8") as f:
+                    f.write(new)
+                # Mark the title as user-set so regenerating AI notes won't
+                # overwrite it.
+                open(base + ".titlelock", "w").close()
+            else:
+                # Cleared the name: drop the custom title and let AI notes name
+                # it again next time.
+                for suf in ("_title.txt", ".titlelock"):
+                    try:
+                        os.remove(base + suf)
+                    except OSError:
+                        pass
         except OSError:
-            log.exception("Could not hide conversation")
-        self._after_remove(base)
-        self._toast("Hidden from list")
+            log.exception("Could not rename conversation")
+            self._toast("Couldn't rename", T.RECORD, dot=T.RECORD)
+            return
+        self.refresh_list()
+        self._select_base(base)
+        self._toast("Renamed", T.GREEN, dot=T.GREEN)
 
     def _delete_conv(self, base):
         if not messagebox.askyesno(
