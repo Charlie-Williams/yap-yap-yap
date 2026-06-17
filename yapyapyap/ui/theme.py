@@ -18,6 +18,7 @@ search field and a scroll container.
 """
 
 import os
+import sys
 import glob
 import math
 import tkinter as tk
@@ -28,15 +29,30 @@ from yapyapyap import config
 
 # --- Bundled fonts ------------------------------------------------------
 def _load_bundled_fonts():
-    if os.name != "nt":
-        return
-    import ctypes
     d = os.path.join(config.ASSETS_DIR, "fonts")
-    try:
-        for ttf in glob.glob(os.path.join(d, "*.ttf")):
-            ctypes.windll.gdi32.AddFontResourceExW(ctypes.c_wchar_p(ttf), 0x10, 0)
-    except Exception:
-        pass
+    if os.name == "nt":
+        # Windows: register each TTF privately for this process via GDI.
+        import ctypes
+        try:
+            for ttf in glob.glob(os.path.join(d, "*.ttf")):
+                ctypes.windll.gdi32.AddFontResourceExW(
+                    ctypes.c_wchar_p(ttf), 0x10, 0)
+        except Exception:
+            pass
+    elif sys.platform == "darwin":
+        # macOS Tk has no private-font API, so make the bundled faces available
+        # by copying them into the user's font library (idempotent). Tk picks
+        # them up on launch; if anything fails we fall back to the system font.
+        import shutil
+        dest = os.path.expanduser("~/Library/Fonts")
+        try:
+            os.makedirs(dest, exist_ok=True)
+            for ttf in glob.glob(os.path.join(d, "*.ttf")):
+                target = os.path.join(dest, os.path.basename(ttf))
+                if not os.path.exists(target):
+                    shutil.copy2(ttf, target)
+        except Exception:
+            pass
 
 
 _load_bundled_fonts()

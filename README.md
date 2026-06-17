@@ -1,12 +1,17 @@
 # YapYapYap
 
-A simple, fully-local meeting recorder and transcriber for Windows. Hit one
-button to record, hit it again to stop, and YapYapYap captures **both your
-microphone and the system audio** (everyone else on the call), transcribes it
-**on your own machine** (no cloud, no API key), and - if you've set up a local
-LLM - turns the transcript into clean notes.
+A simple, fully-local meeting recorder and transcriber for **Windows and
+macOS**. Hit one button to record, hit it again to stop, and YapYapYap captures
+**both your microphone and the system audio** (everyone else on the call),
+transcribes it **on your own machine** (no cloud, no API key), and - if you've
+set up a local LLM - turns the transcript into clean notes.
 
 Everything stays on your computer.
+
+> **Platform note.** System-audio capture works differently per OS. On **Windows**
+> it's automatic (WASAPI loopback). On **macOS** there is no built-in loopback,
+> so you install a small free virtual audio device (BlackHole) once and route
+> your output through it - see [macOS setup](#macos-setup) below.
 
 ---
 
@@ -144,8 +149,15 @@ are always named sensibly.)
 
 ## One-time setup
 
-Install **Python 3.10+** ([python.org](https://www.python.org/downloads/), tick
-**"Add Python to PATH"**). Then, in this folder:
+Install **Python 3.10-3.12** ([python.org](https://www.python.org/downloads/)).
+
+> **Pick 3.10-3.12, not 3.13/3.14.** Transcription uses `faster-whisper`
+> (`ctranslate2`), which only ships wheels for these versions. On a newer Python,
+> `pip install` will fail to find a wheel.
+
+### Windows setup
+
+Tick **"Add Python to PATH"** during install. Then, in this folder:
 
 ```powershell
 pip install -r requirements.txt
@@ -154,13 +166,52 @@ pip install -r requirements.txt
 > `PyAudioWPatch` provides the system-audio (WASAPI loopback) capture. If pip
 > can't find it: `python -m pip install --upgrade pip` first.
 
+### macOS setup
+
+```bash
+# (recommended) use a venv on the right Python
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+`requirements.txt` installs `sounddevice` (the macOS audio backend) automatically;
+`PyAudioWPatch` is skipped on macOS.
+
+**Capturing system audio (the other people on the call).** macOS has no built-in
+loopback, so you give it one once:
+
+1. **Install BlackHole** (a free virtual audio device):
+   `brew install blackhole-2ch` (or download from
+   <https://existential.audio/blackhole/>). Reboot if prompted.
+2. **Create a Multi-Output Device** so you still *hear* the call while it's also
+   sent to BlackHole: open **Audio MIDI Setup** (in /Applications/Utilities),
+   click **+ → Create Multi-Output Device**, and tick **both** your normal
+   speakers/headphones **and** BlackHole 2ch.
+3. **Set your Mac's output to that Multi-Output Device** (System Settings →
+   Sound → Output, or the menu-bar volume control) before recording.
+
+YapYapYap auto-detects the BlackHole input for system audio and your default
+microphone for your own voice. (Got a different virtual device? Set
+`YAPYAPYAP_LOOPBACK_DEVICE` to part of its name.)
+
+> **No BlackHole yet? Recording still works.** If no loopback device is found,
+> YapYapYap records **microphone only** rather than refusing - so an in-person
+> meeting (laptop mic in the room) is captured fully. For remote calls you'll
+> only get your own voice until you set up BlackHole as above.
+
+> **Permissions.** The first time you record, macOS asks to grant **Microphone**
+> access to your terminal / Python - allow it. (System audio via BlackHole needs
+> no screen-recording permission.)
+
 ### AI notes (local model)
 
 You don't need to set anything up by hand: open **Settings → AI Models**, click
-**Install Ollama**, then **Download** a model. (If you'd rather do it yourself:
-install Ollama from <https://ollama.com/download> and `ollama pull llama3.2`.)
-It runs quietly in the background and the app detects it automatically. Without
-it you still get full transcripts - just no AI notes.
+**Install Ollama**, then **Download** a model. On **macOS** this uses Homebrew
+(`brew install ollama`); on **Windows** it uses winget. (Prefer to do it
+yourself? Install Ollama from <https://ollama.com/download> - or
+`brew install ollama` on a Mac - and `ollama pull llama3.2`.) It runs quietly in
+the background and the app detects it automatically. Without it you still get
+full transcripts - just no AI notes.
 
 ---
 
@@ -180,7 +231,7 @@ yapyapyap/                     the application package
 
   core/
     engine.py                  orchestrates recording + transcription + AI notes
-    recorder.py                low-level mic + system-audio capture (WASAPI loopback)
+    recorder.py                low-level mic + system-audio capture (WASAPI loopback on Windows, sounddevice/BlackHole on macOS)
     mixer.py                   resamples both streams to 16 kHz mono and mixes them
     transcribe.py              in-process speech-to-text helper (used by diagnose)
     summarize.py               AI notes + 5-word titles via local Ollama (streaming)
@@ -219,16 +270,36 @@ audio stream or loads Whisper itself. It launches short-lived worker
 subprocesses for recording and for transcription, so the two native runtimes are
 never in the same process and can't collide.
 
+macOS (CoreAudio) doesn't suffer that particular segfault, but the app keeps the
+exact same process-isolation architecture on every platform - it's robust, keeps
+the UI responsive during transcription, and means there's only one code path to
+reason about.
+
 ---
 
 ## Logs & troubleshooting
 
 Every run writes to **`logs/yapyapyap.log`**.
 
+**Windows**
 - **"Could not find a loopback device"** - set Windows sound output to your
   normal speakers/headphones (some Bluetooth setups confuse it) and try again.
 - **No system audio captured** - make sure sound is actually playing through the
   default Windows output device while recording.
+
+**macOS**
+- **"Could not find a system-audio (loopback) input device"** - BlackHole isn't
+  installed or isn't visible. Install it (`brew install blackhole-2ch`) and make
+  sure it appears in **Audio MIDI Setup**.
+- **No system audio captured** - your Mac's **Output** must be set to the
+  **Multi-Output Device** that includes BlackHole while recording (see
+  [macOS setup](#macos-setup)). If output goes straight to your speakers,
+  BlackHole receives nothing.
+- **No microphone captured / silent your-voice track** - grant **Microphone**
+  permission to your terminal/Python in System Settings → Privacy & Security →
+  Microphone.
+
+**Either OS**
 - **Anything else** - check `logs/yapyapyap.log` and run `python -m yapyapyap.apps.diagnose`.
 
 ---

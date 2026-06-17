@@ -1510,18 +1510,21 @@ class App:
             self.root.after(0, self._on_started)
         except Exception as e:
             log.exception("Failed to start recording")
-            self.root.after(0, lambda: self._on_start_failed(e))
+            # Capture the message now: `e` is unbound once the except block
+            # ends, so the deferred after()-lambda must not reference it.
+            msg = str(e)
+            self.root.after(0, lambda: self._on_start_failed(msg))
 
     def _on_started(self):
         self._rec_started = time.time()
         self._set_state("recording")
         log.info("Recording started.")
 
-    def _on_start_failed(self, e):
+    def _on_start_failed(self, msg):
         self.session = None
         self._set_state("idle")
         self._restore_reader()
-        messagebox.showerror(config.APP_NAME, f"Could not start recording:\n\n{e}")
+        messagebox.showerror(config.APP_NAME, f"Could not start recording:\n\n{msg}")
 
     def stop_recording(self):
         log.info("Stop pressed - beginning processing.")
