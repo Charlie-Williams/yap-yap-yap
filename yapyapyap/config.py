@@ -58,8 +58,12 @@ DEFAULT_RECORDINGS_DIR = os.path.join(BASE, "recordings")
 DEFAULT_TRANSCRIPTS_DIR = os.path.join(BASE, "transcripts")
 
 DEFAULT_SUMMARY_PROMPT = """You are an expert meeting-notes assistant. Below is a \
-transcript of a meeting (it may be rough or contain transcription errors). Write \
-concise, accurate notes in Markdown.
+transcript of a meeting (it may be rough, multilingual, or contain transcription \
+errors). Write concise, accurate notes in Markdown.
+
+Always write the notes in English, even when some or all of the transcript is in \
+another language (for example Arabic) - translate any non-English content into \
+English. Use English section headings.
 
 Strict rules:
 - Use ONLY information that is actually present in the transcript. Never invent \
@@ -68,11 +72,12 @@ names, numbers, dates, decisions or action items.
 "[list ...]", "[main topics]", "TBD", "N/A" or "None specified". If a section \
 has no real content, simply leave that section out entirely.
 - Do not output a section heading unless you have real content to put under it.
-- If the transcript is too short, empty or unclear to summarise, reply with a \
-single short sentence saying exactly that, and nothing else.
+- Always produce structured notes using the sections below. The transcript has \
+already been checked and is long enough to summarise, so do NOT reply with a \
+single sentence saying it is too short, empty or unclear - there is always enough \
+to work with.
 
-When there is enough content, use these sections (include a section only when it \
-genuinely has content):
+Use these sections (include a section only when it genuinely has content):
 
 ## Summary
 2-4 sentences on what was discussed and any outcome.
@@ -108,6 +113,28 @@ DEFAULTS = {
 
 def _resolve(value, default):
     return value if value else default
+
+
+# --------------------------------------------------------------------------
+# CPU budget for transcription
+# --------------------------------------------------------------------------
+# Transcription is CPU-heavy. We deliberately leave headroom so the app — and,
+# crucially, the meeting you're recording (Zoom/Teams) and the rest of the
+# system — stay responsive, including on modest 2-4 core laptops. The budget
+# scales with the machine and is never all of it.
+def background_cpu_threads():
+    """Threads for transcription that runs DURING a recording (alongside the
+    meeting). Conservative: about half the cores, so nothing gets starved."""
+    n = os.cpu_count() or 4
+    return max(1, min(n // 2, 8))
+
+
+def foreground_cpu_threads():
+    """Threads for transcription the user is actively waiting on after Stop (or
+    crash recovery), when the meeting is usually over. More generous, but still
+    leaves a core free so the machine stays usable."""
+    n = os.cpu_count() or 4
+    return max(1, min(n - 1, 16))
 
 
 # --------------------------------------------------------------------------

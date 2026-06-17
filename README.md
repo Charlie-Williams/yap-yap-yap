@@ -120,6 +120,11 @@ set of notes - summary, key discussion points, decisions, and action items /
 next steps - streamed in live. Notes are saved next to the recording and copied
 into the conversation's project folder.
 
+Already have notes? The **↻ regenerate** button (top-right of the Notes tab)
+re-runs generation with your latest prompt, overwriting the existing notes -
+handy after you tweak the prompt in Settings. Notes are always written in English,
+even when the meeting is partly in another language.
+
 This runs on a local model via **Ollama**. The first time, go to **Settings → AI
 Models**, install Ollama (one click) and download a model - then it just works.
 If you click Generate before that's set up, the app tells you exactly what to do.
@@ -249,7 +254,7 @@ yapyapyap/                     the application package
   workers/                     subprocesses (see below)
     recorder_worker.py         streams mic + system audio to disk as it records
     process_worker.py          mixes the stems + transcribes with faster-whisper
-    live_worker.py             live captions while recording (auto-fallback)
+    stream_worker.py           transcribes in the background while recording
     whisper_dl_worker.py       downloads a Whisper model in a subprocess
 
   tools/
@@ -281,15 +286,25 @@ playable file — losing at most a couple of seconds. On the next launch the app
 notices any recording a previous session was cut off on and offers to finish
 transcribing it (see `engine.find_interrupted` / `recover`).
 
-### Live captions while recording
+### Transcribing while you record (fast Stop)
 
-`live_worker.py` is a long-lived process that loads Whisper once and transcribes
-the growing audio on disk in near-real-time, so captions appear as people speak.
-It uses the smallest downloaded model for speed; when you press Stop a single
-clean pass over the whole recording produces the authoritative transcript. If the
-machine can't keep up (it measures its own real-time factor), it prints
-`@FALLBACK`, the live captions pause, and you simply get the full transcript on
-Stop — the recording itself is never affected.
+`stream_worker.py` is a long-lived process that loads Whisper once (using the
+configured, accurate model) and transcribes the audio **as it is recorded**,
+reading the growing stems on disk. By the time you press Stop most of the meeting
+is already transcribed, so finishing only needs the short remaining tail — Stop
+is quick even with a slow, accurate model. When you press Stop the worker is told
+to "finalize": it transcribes whatever tail is left, writes the mixed `.wav`
+archive and the final transcript, and exits. It's best-effort — if it can't start
+(e.g. the model isn't downloaded yet) or fails, Stop transparently falls back to a
+single full mix + transcribe pass (`process_worker`), so a recording is never at
+risk. Because the transcript is stitched from windows rather than one pass, it can
+differ very slightly from a single-shot transcription, but uses the same model.
+
+The CPU budget adapts to the machine and always leaves headroom, so it stays
+usable on modest laptops as well as big workstations: while recording it uses
+about half the cores (so the meeting app and the recording stay smooth); after
+Stop it uses more but still leaves a core free (see
+`config.background_cpu_threads` / `config.foreground_cpu_threads`).
 
 macOS (CoreAudio) doesn't suffer that particular segfault, but the app keeps the
 exact same process-isolation architecture on every platform - it's robust, keeps
