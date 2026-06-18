@@ -16,6 +16,7 @@ download, use it" from the Settings window.
 """
 
 import os
+import sys
 import json
 import shutil
 import subprocess
@@ -45,15 +46,31 @@ CURATED = [
 
 
 # --------------------------------------------------------------- detection
+def _first_existing(*paths):
+    """Return the first path that exists on disk, or None."""
+    for p in paths:
+        if p and os.path.isfile(p):
+            return p
+    return None
+
+
 def _find_binary():
-    """Locate the ollama executable (winget doesn't always add it to PATH)."""
+    """Locate the ollama executable (installers don't always add it to PATH)."""
     found = shutil.which("ollama")
     if found:
         return found
-    candidates = [
-        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe"),
-        os.path.expandvars(r"%ProgramFiles%\Ollama\ollama.exe"),
-    ]
+    if sys.platform == "darwin":
+        # Homebrew (Apple Silicon / Intel) and the Ollama.app bundle.
+        candidates = [
+            "/opt/homebrew/bin/ollama",
+            "/usr/local/bin/ollama",
+            "/Applications/Ollama.app/Contents/Resources/ollama",
+        ]
+    else:
+        candidates = [
+            os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Ollama\ollama.exe"),
+        ]
     for c in candidates:
         if os.path.isfile(c):
             return c
@@ -113,17 +130,29 @@ def is_model_installed(tag):
 # --------------------------------------------------------------- install
 def install_ollama(on_line=None):
     """
-    Install Ollama via winget. Calls on_line(text) with output lines.
-    Returns True on success. Blocking - run on a worker thread.
+    Install Ollama via the platform package manager (winget on Windows, Homebrew
+    on macOS). Calls on_line(text) with output lines. Returns True on success.
+    Blocking - run on a worker thread.
     """
-    winget = shutil.which("winget")
-    if not winget:
-        if on_line:
-            on_line("winget isn't available. Please install Ollama from "
-                    "https://ollama.com/download")
-        return False
-    cmd = [winget, "install", "--id", "Ollama.Ollama", "-e",
-           "--accept-package-agreements", "--accept-source-agreements"]
+    if sys.platform == "darwin":
+        brew = shutil.which("brew") or _first_existing(
+            "/opt/homebrew/bin/brew", "/usr/local/bin/brew")
+        if not brew:
+            if on_line:
+                on_line("Homebrew isn't installed. Install it from "
+                        "https://brew.sh, or download Ollama directly from "
+                        "https://ollama.com/download")
+            return False
+        cmd = [brew, "install", "ollama"]
+    else:
+        winget = shutil.which("winget")
+        if not winget:
+            if on_line:
+                on_line("winget isn't available. Please install Ollama from "
+                        "https://ollama.com/download")
+            return False
+        cmd = [winget, "install", "--id", "Ollama.Ollama", "-e",
+               "--accept-package-agreements", "--accept-source-agreements"]
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True,

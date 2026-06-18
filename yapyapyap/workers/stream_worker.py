@@ -86,10 +86,14 @@ def _read_slice(path, start_sec, end_sec):
 
 def _available(mic_wav, sys_wav):
     """How much audio BOTH streams have (the conservative figure used while
-    recording, since both are still growing)."""
+    recording, since both are still growing).
+
+    In MIC-ONLY mode (macOS with no loopback device) the system stream is an
+    empty placeholder that never grows, so fall back to the mic's length -
+    otherwise min() pins us at 0 and background transcription never advances."""
     _, mic = _read_slice(mic_wav, 0, 0)
     _, syd = _read_slice(sys_wav, 0, 0)
-    return min(mic, syd)
+    return mic if syd <= 0 else min(mic, syd)
 
 
 def _available_full(mic_wav, sys_wav):

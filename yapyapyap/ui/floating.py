@@ -14,8 +14,11 @@ a hard-edged colour key, so the disc and the bird stay smooth.
 """
 
 import os
+import sys
 import math
 import tkinter as tk
+
+_IS_MAC = sys.platform == "darwin"
 
 try:
     from PIL import Image, ImageDraw, ImageTk
@@ -50,14 +53,28 @@ class RecordingIndicator(tk.Toplevel):
         self._root = root
         self._on_click = on_click
         self.overrideredirect(True)
+        # Window transparency is platform-specific:
+        #   Windows - a hard-edged magenta colour key (-transparentcolor)
+        #   macOS   - a real transparent window (-transparent + systemTransparent),
+        #             so we can rely on the art's own alpha instead of keying.
+        # _use_color_key drives how _render composites the final frame.
+        self._use_color_key = False
+        bg = KEY
         try:
             self.attributes("-topmost", True)
-            self.attributes("-transparentcolor", KEY)
+            if _IS_MAC:
+                self.attributes("-transparent", True)
+                bg = "systemTransparent"
+            else:
+                self.attributes("-transparentcolor", KEY)
+                self._use_color_key = True
         except tk.TclError:
-            pass
-        self.configure(bg=KEY)
+            # No transparency support: fall back to the colour key (best effort).
+            self._use_color_key = True
+        self._bg = bg
+        self.configure(bg=bg)
 
-        self.canvas = tk.Canvas(self, width=self.SIZE, height=self.SIZE, bg=KEY,
+        self.canvas = tk.Canvas(self, width=self.SIZE, height=self.SIZE, bg=bg,
                                 highlightthickness=0, bd=0, cursor="hand2")
         self.canvas.pack()
 
@@ -170,9 +187,16 @@ class RecordingIndicator(tk.Toplevel):
                   fill=acc + (255,))
 
         img = img.resize((self.SIZE, self.SIZE), Image.LANCZOS)
-        mask = img.getchannel("A").point(lambda a: 255 if a > 127 else 0)
-        out = Image.new("RGBA", img.size, (255, 0, 255, 255))
-        out.paste(img, (0, 0), mask)
+        if self._use_color_key:
+            # Windows: flatten alpha onto the magenta key so the corners are
+            # keyed out crisply by -transparentcolor.
+            mask = img.getchannel("A").point(lambda a: 255 if a > 127 else 0)
+            out = Image.new("RGBA", img.size, (255, 0, 255, 255))
+            out.paste(img, (0, 0), mask)
+        else:
+            # macOS (real transparent window): keep the art's own alpha so the
+            # disc edges stay smooth against the transparent background.
+            out = img
         self._photo = ImageTk.PhotoImage(out)
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
