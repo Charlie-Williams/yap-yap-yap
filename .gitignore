@@ -16,6 +16,9 @@ logs/
 recordings/
 transcripts/
 
+# Local working docs / trackers (not committed)
+UI_UX_TRACKER.md
+
 # OS / editor
 .DS_Store
 Thumbs.db

@@ -20,6 +20,7 @@ makes Stop reliable instead of crashing.
 
 import os
 import re
+import sys
 import time
 import threading
 import subprocess
@@ -153,9 +154,10 @@ def _ellipsize(font_obj, text, max_w):
 # Rail / list widgets
 # ===========================================================================
 class NavItem(tk.Canvas):
-    """A rail navigation row: icon + label, rounded highlight when active."""
+    """A rail navigation row: icon + all-caps label. Active = ink slab with
+    yellow text (inverse), hover = ink-outlined box. Editorial-brutalist."""
 
-    H = 34
+    H = 38
 
     def __init__(self, parent, icon, label, command, indent=0, swatch=None,
                  chevron=None, width=RAIL_INNER):
@@ -186,26 +188,28 @@ class NavItem(tk.Canvas):
     def redraw(self):
         self.delete("all")
         w, h = self._wd, self.H
+        ink_fg = self.active            # text/icon flip to yellow on the ink slab
         if self.active:
-            T.round_rect(self, 0, 1, w, h - 1, 10, fill=T.RAIL_ACTIVE,
-                         outline=T.RAIL_HAIRLINE, width=1)
+            T.round_rect(self, 1, 1, w - 1, h - 1, T.RADIUS.SM, fill=T.INK,
+                         outline=T.INK, width=T.RULE)
         elif self._hover:
-            T.round_rect(self, 0, 1, w, h - 1, 10, fill=T.RAIL_HOVER,
-                         outline=T.RAIL_HOVER)
+            T.round_rect(self, 1, 1, w - 1, h - 1, T.RADIUS.SM, fill=T.RAIL_HOVER,
+                         outline=T.INK, width=T.RULE)
+        fg = T.YELLOW if ink_fg else T.INK
         x = 14 + self._indent
         if self._swatch:
-            T.round_rect(self, x, h / 2 - 4, x + 8, h / 2 + 4, 2,
+            T.round_rect(self, x, h / 2 - 4, x + 8, h / 2 + 4, 1,
                          fill=self._swatch, outline=self._swatch)
             x += 18
         elif self._icon:
-            T.draw_icon(self, self._icon, x + 8, h / 2, 15, T.INK)
+            T.draw_icon(self, self._icon, x + 8, h / 2, 15, fg)
             x += 24
-        f = T.semi(10) if not self._indent else T.semi(9)
-        self.create_text(x, h / 2, text=self._label, anchor="w", fill=T.INK,
+        f = T.bold(9) if not self._indent else T.bold(8)
+        self.create_text(x, h / 2, text=self._label.upper(), anchor="w", fill=fg,
                          font=f)
         if self._chevron:
             T.draw_icon(self, "chev_down" if self._chevron == "down"
-                        else "chev_right", w - 16, h / 2, 11, T.INK_SOFT)
+                        else "chev_right", w - 16, h / 2, 11, fg)
 
 
 class RailPill(tk.Canvas):
@@ -238,11 +242,11 @@ class RailPill(tk.Canvas):
     def redraw(self):
         self.delete("all")
         w, h = self._wd, self.H
-        fill = T.RAIL_ACTIVE if self._hover else T.RAIL_PILL
-        T.round_rect(self, 0, 1, w, h - 1, 11, fill=fill,
-                     outline=T.RAIL_HAIRLINE, width=1)
+        fill = T.RAIL_ACTIVE if self._hover else T.WHITE
+        T.round_rect(self, 1, 1, w - 1, h - 1, T.RADIUS.SM, fill=fill,
+                     outline=T.INK, width=T.RULE)
         sw = T.AMBER if self._has_project else T.SUBTLE
-        T.round_rect(self, 14, h / 2 - 4, 22, h / 2 + 4, 2, fill=sw, outline=sw)
+        T.round_rect(self, 14, h / 2 - 4, 22, h / 2 + 4, 1, fill=sw, outline=sw)
         f = tkfont.Font(family=T.UI_MED, size=10)
         label = _ellipsize(f, self._value, w - 64)
         self.create_text(32, h / 2, text=label, anchor="w",
@@ -259,22 +263,25 @@ class PrivacyFooter(tk.Canvas):
     def __init__(self, parent, width=RAIL_INNER):
         super().__init__(parent, width=width, height=self.H, bg=T.YELLOW,
                          highlightthickness=0, bd=0)
-        T.round_rect(self, 0, 1, width, self.H - 1, 12, fill=T.RAIL_PILL_SOFT,
-                     outline=T.RAIL_HAIRLINE, width=1)
-        T.draw_icon(self, "lock", 22, self.H / 2, 14, T.INK_SOFT)
-        self.create_text(38, self.H / 2, text="Everything stays on this PC",
-                         anchor="w", fill=T.INK_SOFT, font=T.semi(9))
+        T.round_rect(self, 1, 1, width - 1, self.H - 1, T.RADIUS.SM,
+                     fill=T.RAIL_PILL_SOFT, outline=T.INK, width=T.RULE)
+        T.draw_icon(self, "lock", 20, self.H / 2, 14, T.INK)
+        self.create_text(36, self.H / 2, text="STAYS ON THIS DEVICE",
+                         anchor="w", fill=T.INK, font=T.bold(8))
 
 
 class ConvCard(tk.Canvas):
-    """One conversation in the list column (rounded selection, kebab menu)."""
+    """One conversation: a hard-edged ruled row with a big leading index
+    numeral, an H3 title and eyebrow meta, over a 2px ink divider. Selected =
+    ink slab with yellow text (inverse). Editorial-brutalist."""
 
-    H = 76
+    H = 84
 
-    def __init__(self, parent, item, on_select, on_menu):
+    def __init__(self, parent, item, index, on_select, on_menu):
         super().__init__(parent, height=self.H, bg=T.SURFACE,
                          highlightthickness=0, bd=0, cursor="hand2")
         self.item = item
+        self._index = index
         self._on_select, self._on_menu = on_select, on_menu
         self.selected = False
         self._hover = False
@@ -304,49 +311,60 @@ class ConvCard(tk.Canvas):
         w, h = self.winfo_width(), self.H
         if w < 40:
             return
-        if self.selected:
-            T.round_rect(self, 2, 2, w - 2, h - 4, 12, fill=T.SOFT,
-                         outline=T.YELLOW_DEEP, width=1.2)
+        on_ink = self.selected
+        if on_ink:                       # selected = full-bleed ink slab
+            self.create_rectangle(0, 0, w, h - T.RULE, fill=T.INK, outline=T.INK)
         elif self._hover:
-            T.round_rect(self, 2, 2, w - 2, h - 4, 12, fill=T.LIST_HOVER,
-                         outline=T.LIST_HOVER)
+            self.create_rectangle(0, 0, w, h - T.RULE, fill=T.LIST_HOVER,
+                                  outline=T.LIST_HOVER)
+        # Thick structural divider under every row.
+        self.create_rectangle(0, h - T.RULE, w, h, fill=T.INK, outline=T.INK)
+
+        fg = T.YELLOW if on_ink else T.INK
+        meta_fg = T.mix(T.YELLOW, T.INK, 0.28) if on_ink else T.MUTED
+        sub_fg = T.mix(T.YELLOW, T.INK, 0.42) if on_ink else T.SUBTLE
+
         it = self.item
-        pad = 14
-        f_title = tkfont.Font(family=T.UI_SEMI, size=11)
+        tx = 64
+        # Big leading index numeral.
+        self.create_text(14, h / 2 - 5, text=f"{self._index:02d}", anchor="w",
+                         fill=fg, font=T.numeral(22))
+        f_title = tkfont.Font(family=T.UI_SEMI, size=13)
         title = it["title"] or ("Transcript" if it["has_tx"] else "Recording")
-        self.create_text(pad, 21, text=_ellipsize(f_title, title, w - 52),
-                         anchor="w", fill=T.INK, font=T.semi(11))
-        meta = it["list_date"] + (f"   •   {it['duration']}" if it["duration"]
-                                  else "")
-        f_meta = tkfont.Font(family=T.UI_MED, size=9)
-        self.create_text(pad, 41, text=_ellipsize(f_meta, meta, w - 30),
-                         anchor="w", fill=T.MUTED, font=T.med(9))
-        x = pad
+        self.create_text(tx, 25, text=_ellipsize(f_title, title, w - tx - 28),
+                         anchor="w", fill=fg, font=T.semi(13))
+        meta = (it["list_date"] + (f"   •   {it['duration']}"
+                                   if it["duration"] else "")).upper()
+        f_meta = tkfont.Font(family=T.UI_BOLD, size=8)
+        self.create_text(tx, 46, text=_ellipsize(f_meta, meta, w - tx - 20),
+                         anchor="w", fill=meta_fg, font=T.bold(8))
+        x = tx
         if it["project"]:
-            T.round_rect(self, x, 56, x + 7, 63, 2, fill=T.AMBER, outline=T.AMBER)
+            sw = T.YELLOW if on_ink else T.AMBER
+            self.create_rectangle(x, 61, x + 7, 68, fill=sw, outline=sw)
             x += 12
-            self.create_text(x, 60, text=it["project"], anchor="w",
-                             fill=T.AMBER, font=T.semi(9))
-            x += tkfont.Font(family=T.UI_SEMI, size=9).measure(it["project"]) + 14
+            self.create_text(x, 64, text=it["project"].upper(), anchor="w",
+                             fill=T.YELLOW if on_ink else T.AMBER_TEXT,
+                             font=T.bold(8))
+        elif it["has_tx"] and not it["has_notes"]:
+            self.create_text(x, 64, text="TRANSCRIPT ONLY", anchor="w",
+                             fill=sub_fg, font=T.bold(8))
         else:
-            self.create_text(x, 60, text="No project", anchor="w",
-                             fill=T.SUBTLE, font=T.med(9))
-            x += tkfont.Font(family=T.UI_MED, size=9).measure("No project") + 14
-        if it["has_tx"] and not it["has_notes"]:
-            self.create_text(x, 60, text="TRANSCRIPT ONLY", anchor="w",
-                             fill=T.SUBTLE, font=T.bold(7))
+            self.create_text(x, 64, text="NO PROJECT", anchor="w",
+                             fill=sub_fg, font=T.bold(8))
         # Kebab (top-right).
-        kx, ky = w - 18, 18
+        kx, ky = w - 18, 20
         if self._hover or self.selected:
             T.draw_icon(self, "kebab", kx, ky, 13,
-                        T.INK_SOFT if self._hover else T.MUTED)
+                        fg if on_ink else T.INK_SOFT)
         self._kebab_zone = (kx - 12, ky - 12, kx + 12, ky + 12)
 
 
 class RecordingCard(tk.Canvas):
-    """The special top-of-list card shown while a recording is in progress."""
+    """The top-of-list row shown while recording: a red REC dot, an all-caps
+    eyebrow and the running timer, over a thick ink divider."""
 
-    H = 60
+    H = 72
 
     def __init__(self, parent, project_label):
         super().__init__(parent, height=self.H, bg=T.SURFACE,
@@ -365,15 +383,18 @@ class RecordingCard(tk.Canvas):
         w, h = self.winfo_width(), self.H
         if w < 40:
             return
-        edge = T.mix(T.RECORD, "#FFFFFF", 0.6)
-        T.round_rect(self, 2, 2, w - 2, h - 4, 12, fill=T.REC_TINT,
-                     outline=edge, width=1.2)
-        dot = T.RECORD if self._pulse else T.mix(T.RECORD, T.REC_TINT, 0.6)
-        self.create_oval(16, 22, 26, 32, fill=dot, outline=dot)
-        self.create_text(36, 21, text="Recording…", anchor="w", fill=T.INK,
-                         font=T.semi(11))
-        self.create_text(36, 41, text=f"{self._time} · {self._project}",
-                         anchor="w", fill=T.MUTED, font=T.med(9))
+        # Recording slab: red-tinted fill with a thick red border.
+        self.create_rectangle(2, 2, w - 2, h - T.RULE - 2, fill=T.REC_TINT,
+                              outline=T.RECORD, width=T.RULE)
+        self.create_rectangle(0, h - T.RULE, w, h, fill=T.INK, outline=T.INK)
+        dot = T.RECORD if self._pulse else T.mix(T.RECORD, T.REC_TINT, 0.55)
+        self.create_oval(16, 21, 28, 33, fill=dot, outline=dot)
+        self.create_text(38, 24, text="RECORDING", anchor="w", fill=T.RECORD_TEXT,
+                         font=T.bold(9))
+        meta = (self._time + "   •   " + self._project).upper()
+        self.create_text(38, 46, text=_ellipsize(
+            tkfont.Font(family=T.UI_BOLD, size=8), meta, w - 50),
+            anchor="w", fill=T.MUTED, font=T.bold(8))
 
 
 # ===========================================================================
@@ -398,6 +419,7 @@ class App:
         self._conv_selected = None
         self._current_base = None
         self._view_mode = "notes"
+        self._sec_rules = []   # embedded ink underline rules under section heads
 
         os.makedirs(config.RECORDINGS_DIR, exist_ok=True)
         os.makedirs(config.TRANSCRIPTS_DIR, exist_ok=True)
@@ -501,30 +523,32 @@ class App:
         rail = tk.Frame(self.root, bg=T.YELLOW, width=RAIL_W)
         rail.pack(side="left", fill="y")
         rail.pack_propagate(False)
-        tk.Frame(self.root, bg=T.YELLOW_DEEP, width=1).pack(side="left", fill="y")
+        # Thick ink rule separating the rail from the workspace (brutalist spine).
+        tk.Frame(self.root, bg=T.INK, width=T.RULE + 1).pack(side="left", fill="y")
 
-        # Brand.
+        # Brand: big Bricolage wordmark.
         brandrow = tk.Frame(rail, bg=T.YELLOW)
-        brandrow.pack(fill="x", padx=16, pady=(18, 16))
+        brandrow.pack(fill="x", padx=16, pady=(20, 18))
         try:
             self._logo_img = tk.PhotoImage(file=os.path.join(_ASSETS, "logo_32.png"))
             tk.Label(brandrow, image=self._logo_img, bg=T.YELLOW, bd=0).pack(
-                side="left", padx=(2, 10))
+                side="left", padx=(2, 8))
         except Exception:
             self._logo_img = None
         wordmark = tk.Frame(brandrow, bg=T.YELLOW)
         wordmark.pack(side="left")
         for part, shade in zip(("Yap", "Yap", "Yap"), T.WORDMARK):
             tk.Label(wordmark, text=part, bg=T.YELLOW, fg=shade,
-                     font=T.brand(15), padx=0, pady=0, bd=0,
+                     font=T.brand(21), padx=0, pady=0, bd=0,
                      highlightthickness=0).pack(side="left")
 
-        # Record control.
+        # Record control: full-width ink slab, yellow all-caps label, red dot.
         self.btn = T.RoundedButton(
             rail, "Start recording", command=self.on_toggle, fill=T.INK,
-            fill_hover="#000000", fg="white", bg=T.YELLOW, font_=T.semi(11),
-            padx=18, pady=11, radius=12, icon="dot", icon_color=T.RECORD,
-            min_width=RAIL_INNER, lip="#0A0A08")
+            fill_hover="#000000", fg=T.YELLOW, bg=T.YELLOW, font_=T.bold(11),
+            padx=18, pady=13, radius=T.RADIUS.MD, icon="dot", icon_color=T.RECORD,
+            min_width=RAIL_INNER, border=T.INK, border_width=T.RULE, caps=True,
+            lip="#0A0A08", lip_h=3)
         self.btn.pack(padx=16)
 
         # Status sub-line under the record control.
@@ -538,13 +562,6 @@ class App:
         self._sub_lbl = tk.Label(subrow, text="", bg=T.YELLOW, fg=T.INK_SOFT,
                                  font=T.semi(9))
         self._sub_state = None  # (text, color, dot, pulse)
-
-        # Cancel control — only shown while recording (see _set_state).
-        self.cancel_btn = T.RoundedButton(
-            rail, "Cancel recording", command=self._cancel_recording,
-            fill=T.YELLOW, fill_hover=T.RAIL_HOVER, fg=T.RECORD, bg=T.YELLOW,
-            font_=T.semi(9), padx=14, pady=7, radius=10, border=T.RECORD,
-            min_width=RAIL_INNER)
 
         # Project picker.
         self.project_var = tk.StringVar(value=NO_PROJECT)
@@ -573,14 +590,19 @@ class App:
         listcol = tk.Frame(self.root, bg=T.SURFACE, width=LIST_W)
         listcol.pack(side="left", fill="y")
         listcol.pack_propagate(False)
-        tk.Frame(self.root, bg=T.BORDER, width=1).pack(side="left", fill="y")
+        tk.Frame(self.root, bg=T.INK, width=T.RULE).pack(side="left", fill="y")
 
         head = tk.Frame(listcol, bg=T.SURFACE)
-        head.pack(fill="x", padx=16, pady=(20, 0))
-        self.list_title = tk.Label(head, text="All conversations",
-                                   bg=T.SURFACE, fg=T.INK, font=T.head(13),
+        head.pack(fill="x", padx=16, pady=(22, 0))
+        self.list_title = tk.Label(head, text="ALL CONVERSATIONS",
+                                   bg=T.SURFACE, fg=T.INK, font=T.head(18),
                                    anchor="w")
         self.list_title.pack(fill="x")
+        # Measure against the column's inner width (16px padding each side) so
+        # long uppercased project names ellipsize instead of clipping the edge.
+        self._title_font = tkfont.Font(family=T.HEAD_FAMILY, size=18)
+        self._title_max_w = LIST_W - 32
+        tk.Frame(head, bg=T.INK, height=T.RULE).pack(fill="x", pady=(8, 0))
 
         self.search = T.SearchField(listcol, "Search conversations",
                                     on_change=self._on_search)
@@ -588,17 +610,16 @@ class App:
 
         countrow = tk.Frame(listcol, bg=T.SURFACE)
         countrow.pack(fill="x", padx=18, pady=(10, 4))
-        self.count_lbl = tk.Label(countrow, text="", bg=T.SURFACE, fg=T.SUBTLE,
-                                  font=T.font(9), anchor="w")
+        self.count_lbl = tk.Label(countrow, text="", bg=T.SURFACE, fg=T.MUTED,
+                                  font=T.bold(8), anchor="w")
         self.count_lbl.pack(side="left")
-        self.sort_lbl = tk.Label(countrow, text="Newest ▾", bg=T.SURFACE,
-                                 fg=T.MUTED, font=T.med(9), cursor="hand2")
+        self.sort_lbl = tk.Label(countrow, text="NEWEST ▾", bg=T.SURFACE,
+                                 fg=T.INK_SOFT, font=T.bold(8), cursor="hand2")
         self.sort_lbl.pack(side="right")
         self.sort_lbl.bind("<Button-1>", self._open_sort_menu)
 
         self.conv_scroll = T.ScrollFrame(listcol, bg=T.SURFACE)
-        self.conv_scroll.pack(fill="both", expand=True, padx=(8, 4),
-                              pady=(2, 10))
+        self.conv_scroll.pack(fill="both", expand=True, padx=0, pady=(6, 0))
         self._conv_cards = {}
         self._empty_lbl = None
 
@@ -609,7 +630,7 @@ class App:
         # First-run download banner (hidden until needed).
         self._banner = tk.Frame(reader, bg=T.AMBER_SOFT)
         self._banner_lbl = tk.Label(self._banner, text="", bg=T.AMBER_SOFT,
-                                    fg=T.AMBER, font=T.semi(9), pady=6)
+                                    fg=T.AMBER_TEXT, font=T.semi(9), pady=6)
         self._banner_lbl.pack()
 
         self.topbar = tk.Frame(reader, bg=T.PAPER, height=56)
@@ -631,7 +652,7 @@ class App:
         self.share_btn = T.IconButton(self._icons, "share", self._reveal_doc,
                                       bg=T.PAPER)
         self.share_btn.pack(side="left")
-        tk.Frame(reader, bg=T.BORDER, height=1).pack(fill="x")
+        tk.Frame(reader, bg=T.INK, height=T.RULE).pack(fill="x")
 
         self.body_holder = tk.Frame(reader, bg=T.PAPER)
         self.body_holder.pack(fill="both", expand=True)
@@ -662,6 +683,39 @@ class App:
             self.viewer.configure(padx=pad)
         except tk.TclError:
             pass
+        self._resize_sec_rules()
+
+    def _doc_text_width(self):
+        """The usable text width inside the centered document column."""
+        self.viewer.update_idletasks()
+        pad = int(float(self.viewer.cget("padx")))
+        return self.viewer.winfo_width() - 2 * pad
+
+    def _section_rule(self, v):
+        """Embed a 2px ink underline rule on its own line (brutalist section
+        head). Tracked in _sec_rules so it resizes with the column."""
+        fr = tk.Frame(v, bg=T.INK, height=T.RULE)
+        try:
+            w = min(360, max(120, self._doc_text_width()))
+        except (tk.TclError, ValueError):
+            w = 320
+        fr.configure(width=w)
+        v.window_create("end", window=fr, padx=0, pady=3)
+        v.insert("end", "\n")
+        self._sec_rules.append(fr)
+
+    def _resize_sec_rules(self):
+        if not self._sec_rules:
+            return
+        try:
+            w = min(360, max(120, self._doc_text_width()))
+        except (tk.TclError, ValueError):
+            return
+        for fr in self._sec_rules:
+            try:
+                fr.configure(width=w)
+            except tk.TclError:
+                pass
 
     def _viewer_wheel(self, e):
         self.viewer.yview_scroll(int(-e.delta / 120), "units")
@@ -671,28 +725,26 @@ class App:
         v.tag_configure("h1", font=T.head(20), foreground=T.INK,
                         spacing1=6, spacing3=4)
         v.tag_configure("meta", font=T.med(10), foreground=T.MUTED, spacing3=16)
-        v.tag_configure("meta_proj", font=T.semi(10), foreground=T.AMBER)
-        v.tag_configure("secsq", font=T.bold(8), foreground=T.YELLOW,
-                        spacing1=16, spacing3=7)
-        v.tag_configure("seclabel", font=T.bold(8), foreground=T.MUTED,
-                        spacing1=16, spacing3=7)
+        v.tag_configure("meta_proj", font=T.semi(10), foreground=T.AMBER_TEXT)
+        # Editorial section head: bold all-caps ink, with a 2px ink underline
+        # rule embedded on the following line (see _section_rule).
+        v.tag_configure("sech", font=T.bold(11), foreground=T.INK,
+                        spacing1=22, spacing3=2)
         v.tag_configure("body", font=T.font(11), foreground=T.INK_SOFT,
                         spacing3=7)
         v.tag_configure("bullet", font=T.font(11), foreground=T.INK_SOFT,
                         lmargin1=2, lmargin2=20, spacing3=5)
-        v.tag_configure("bdot", font=T.font(11), foreground=T.AMBER)
+        v.tag_configure("bdot", font=T.bold(13), foreground=T.AMBER_TEXT)
         v.tag_configure("task", font=T.font(11), foreground=T.INK_SOFT,
                         lmargin1=2, lmargin2=26, spacing3=6)
-        v.tag_configure("cbox", font=("Segoe UI Symbol", 11),
-                        foreground=T.BORDER_DEEP)
+        v.tag_configure("cbox", font=("Segoe UI Symbol", 12),
+                        foreground=T.INK_SOFT)
         v.tag_configure("italicm", font=T.font(11), foreground=T.MUTED,
                         spacing3=7)
         v.tag_configure("tline", font=T.font(11), foreground=T.INK_SOFT,
                         tabs=("52",), lmargin2=52, spacing3=7)
-        v.tag_configure("ts", font=T.med(9), foreground=T.SUBTLE)
-        v.tag_configure("pill", font=T.semi(10), foreground=T.AMBER,
-                        spacing1=4, spacing3=12)
-        v.tag_configure("caret", font=T.semi(11), foreground=T.AMBER)
+        v.tag_configure("ts", font=T.bold(8), foreground=T.MUTED)
+        v.tag_configure("caret", font=T.semi(11), foreground=T.AMBER_TEXT)
         v.tag_configure("mutedline", font=T.font(10), foreground=T.MUTED)
 
     # ---- rail status sub-line ----------------------------------------
@@ -792,7 +844,9 @@ class App:
     def _set_nav(self, project):
         self._nav_filter = project
         self._update_nav_active()
-        self.list_title.configure(text=project or "All conversations")
+        self.list_title.configure(text=_ellipsize(
+            self._title_font, (project or "All conversations").upper(),
+            self._title_max_w))
         self.refresh_list()
 
     def _update_nav_active(self):
@@ -833,7 +887,7 @@ class App:
 
     def _set_sort(self, newest):
         self._sort_newest = newest
-        self.sort_lbl.configure(text="Newest ▾" if newest else "Oldest ▾")
+        self.sort_lbl.configure(text="NEWEST ▾" if newest else "OLDEST ▾")
         self.refresh_list()
 
     # ------------------------------------------------------------- state
@@ -841,14 +895,14 @@ class App:
         self.state = state
         if state == "idle":
             self.btn.set_text("Start recording")
-            self.btn.set_colors(T.INK, "#000000", fg="white", icon="dot",
+            self.btn.set_colors(T.INK, "#000000", fg=T.YELLOW, icon="dot",
                                 icon_color=T.RECORD, lip="#0A0A08")
             self.btn.set_enabled(True)
             self.btn.configure(cursor="hand2")
             self._sub_clear()
         elif state == "starting":
             self.btn.set_text("Start recording")
-            self.btn.set_colors(T.INK, T.INK, fg="white", icon="dot",
+            self.btn.set_colors(T.INK, T.INK, fg=T.YELLOW, icon="dot",
                                 icon_color=T.mix(T.RECORD, T.INK, 0.4),
                                 lip="#0A0A08")
             self.btn.configure(cursor="arrow")
@@ -875,13 +929,7 @@ class App:
             self._live_count = 0
             self._frac = None
             self._show_processing_view()
-        # Cancel control: visible only while recording.
-        if hasattr(self, "cancel_btn"):
-            if state == "recording":
-                self.cancel_btn.pack(padx=16, pady=(0, 6),
-                                     before=self.project_pill)
-            else:
-                self.cancel_btn.pack_forget()
+        # Stop / Cancel live in the recording hero view (see _show_recording_view).
         self.refresh_list()
         if hasattr(self, "indicator"):
             self._update_indicator()
@@ -892,7 +940,8 @@ class App:
         elapsed = int(time.time() - self._rec_started) if self._rec_started else 0
         m, s = divmod(elapsed, 60)
         t = f"{m:02d}:{s:02d}"
-        self._pulse_on = not self._pulse_on
+        # Reduced motion: keep the dot solid (no breathing) while time updates.
+        self._pulse_on = True if T.MOTION.reduced else (not self._pulse_on)
         self._sub_set(f"Recording · {t}", T.INK_SOFT, dot=T.RECORD, pulse=True)
         self._draw_sub_dot(T.RECORD, self._pulse_on)
         if self._rec_card is not None:
@@ -903,6 +952,11 @@ class App:
         if getattr(self, "_hero_timer", None) is not None:
             try:
                 self._hero_timer.configure(text=t)
+            except tk.TclError:
+                pass
+        if hasattr(self, "indicator"):
+            try:
+                self.indicator.set_time(t)
             except tk.TclError:
                 pass
         self.root.after(500, self._tick_timer)
@@ -955,40 +1009,30 @@ class App:
             tk.Label(inner, image=self._mascot_img, bg=T.PAPER).pack(pady=(0, 10))
         except Exception:
             pass
-        tk.Label(inner, text="Ready when you are", bg=T.PAPER, fg=T.INK,
-                 font=T.head(16)).pack()
-        helper = tk.Frame(inner, bg=T.PAPER)
-        helper.pack(pady=(6, 0))
-        tk.Label(helper, text="Press ", bg=T.PAPER, fg=T.MUTED,
-                 font=T.font(10)).pack(side="left")
-        tk.Label(helper, text="Start recording", bg=T.PAPER, fg=T.INK,
-                 font=T.semi(10)).pack(side="left")
-        tail = (" in the sidebar to capture your first conversation."
-                if first_run else
-                " to capture a conversation, or pick one from the list.")
-        tk.Label(helper, text=tail, bg=T.PAPER, fg=T.MUTED,
-                 font=T.font(10)).pack(side="left")
+        tk.Label(inner, text="READY WHEN YOU ARE", bg=T.PAPER, fg=T.INK,
+                 font=T.head(30)).pack()
+        prop = ("Record any call. Transcribe and summarise it locally. "
+                "Nothing leaves your device." if first_run else
+                "Press start to capture a conversation, or pick one from "
+                "the list.")
+        tk.Label(inner, text=prop, bg=T.PAPER, fg=T.MUTED, font=T.font(11),
+                 wraplength=460, justify="center").pack(pady=(10, 0))
+        # Primary call-to-action bar.
+        T.BarButton(inner, "Start recording", self.on_toggle, bg=T.PAPER,
+                    icon="dot", min_width=260).pack(pady=(22, 0))
         if first_run:
+            # First-run steps as numbered, ruled editorial rows (not soft cards).
             steps = tk.Frame(inner, bg=T.PAPER)
-            steps.pack(pady=(26, 0))
-            data = [("1", "Record", "One button captures you +\neveryone on the call"),
-                    ("2", "Transcribe", "Turned into text on\nyour machine"),
-                    ("3", "AI notes", "A clean summary, decisions\n& action items")]
+            steps.pack(pady=(32, 0), fill="x")
+            data = [("1", "Record",
+                     "One button captures you and everyone on the call."),
+                    ("2", "Transcribe",
+                     "Turned into text on your machine."),
+                    ("3", "AI notes",
+                     "A clean summary, decisions and action items.")]
             for n, title, desc in data:
-                card = tk.Frame(steps, bg=T.SURFACE, highlightbackground=T.BORDER,
-                                highlightthickness=1)
-                card.pack(side="left", padx=6, ipadx=4, ipady=2)
-                pad = tk.Frame(card, bg=T.SURFACE)
-                pad.pack(padx=12, pady=10)
-                chip = tk.Canvas(pad, width=22, height=22, bg=T.SURFACE,
-                                 highlightthickness=0, bd=0)
-                chip.pack(anchor="w")
-                chip.create_oval(1, 1, 21, 21, fill=T.YELLOW, outline=T.YELLOW_DEEP)
-                chip.create_text(11, 11, text=n, font=T.bold(9), fill=T.INK)
-                tk.Label(pad, text=title, bg=T.SURFACE, fg=T.INK,
-                         font=T.semi(10)).pack(anchor="w", pady=(6, 1))
-                tk.Label(pad, text=desc, bg=T.SURFACE, fg=T.MUTED,
-                         font=T.font(8), justify="left").pack(anchor="w")
+                T.NumberedRow(steps, n, title, desc, bg=T.PAPER).pack(fill="x")
+            tk.Frame(steps, bg=T.INK, height=T.RULE).pack(fill="x")
 
     # ---- recording view -------------------------------------------------
     def _show_recording_view(self):
@@ -997,44 +1041,59 @@ class App:
         inner = tk.Frame(area, bg=T.PAPER)
         inner.place(relx=0.5, rely=0.44, anchor="center")
 
-        pill = tk.Canvas(inner, width=86, height=30, bg=T.PAPER,
+        # Bold REC badge: ink slab, red dot, yellow all-caps label.
+        pill = tk.Canvas(inner, width=104, height=36, bg=T.PAPER,
                          highlightthickness=0, bd=0)
         pill.pack()
-        T.round_rect(pill, 1, 1, 85, 29, 14, fill="#FCE9EA",
-                     outline=T.mix(T.RECORD, "#FFFFFF", 0.6), width=1)
-        self._rec_pill_dot = pill.create_oval(16, 11, 24, 19, fill=T.RECORD,
+        T.round_rect(pill, 1, 1, 103, 35, T.RADIUS.SM, fill=T.INK,
+                     outline=T.INK, width=T.RULE)
+        self._rec_pill_dot = pill.create_oval(20, 13, 30, 23, fill=T.RECORD,
                                               outline=T.RECORD)
-        pill.create_text(52, 15, text="REC", fill=T.RECORD, font=T.bold(9))
+        pill.create_text(62, 18, text="REC", fill=T.YELLOW, font=T.bold(11))
         self._rec_pill = pill
 
+        # The giant editorial timer.
         self._hero_timer = tk.Label(inner, text="00:00", bg=T.PAPER, fg=T.INK,
-                                    font=T.head(44))
-        self._hero_timer.pack(pady=(10, 6))
+                                    font=T.hero(72))
+        self._hero_timer.pack(pady=(14, 8))
 
-        self._wave = tk.Canvas(inner, width=336, height=44, bg=T.PAPER,
+        self._wave = tk.Canvas(inner, width=432, height=56, bg=T.PAPER,
                                highlightthickness=0, bd=0)
-        self._wave.pack(pady=(2, 14))
+        self._wave.pack(pady=(2, 18))
         import random
-        self._wave_h = [random.randint(6, 38) for _ in range(42)]
+        self._wave_h = [random.randint(8, 50) for _ in range(48)]
 
         tk.Label(inner, text="Listening to your microphone and this PC's audio",
-                 bg=T.PAPER, fg=T.MUTED, font=T.font(10)).pack()
+                 bg=T.PAPER, fg=T.MUTED, font=T.font(11)).pack()
         if getattr(self.session, "bg_active", False):
             tk.Label(inner, text="Transcribing as you go, so finishing is quick",
-                     bg=T.PAPER, fg=T.SUBTLE, font=T.font(9)).pack(pady=(2, 0))
+                     bg=T.PAPER, fg=T.MUTED, font=T.font(10)).pack(pady=(2, 0))
         chips = tk.Frame(inner, bg=T.PAPER)
-        chips.pack(pady=(10, 0))
+        chips.pack(pady=(14, 0))
         for label in ("Microphone", "System audio"):
-            f = tkfont.Font(family=T.UI_SEMI, size=9)
-            w = f.measure(label) + 38
-            c = tk.Canvas(chips, width=w, height=26, bg=T.PAPER,
+            f = tkfont.Font(family=T.UI_BOLD, size=8)
+            txt = label.upper()
+            w = f.measure(txt) + 40
+            c = tk.Canvas(chips, width=w, height=28, bg=T.PAPER,
                           highlightthickness=0, bd=0)
-            c.pack(side="left", padx=5)
-            T.round_rect(c, 1, 1, w - 1, 25, 12, fill=T.WHITE, outline=T.BORDER,
-                         width=1.2)
-            c.create_oval(12, 10, 18, 16, fill=T.GREEN, outline=T.GREEN)
-            c.create_text(26, 13, text=label, anchor="w", fill=T.INK_SOFT,
-                          font=T.semi(9))
+            c.pack(side="left", padx=6)
+            T.round_rect(c, 1, 1, w - 1, 27, T.RADIUS.SM, fill=T.WHITE,
+                         outline=T.INK, width=T.RULE)
+            c.create_oval(13, 11, 21, 19, fill=T.GREEN, outline=T.GREEN)
+            c.create_text(28, 14, text=txt, anchor="w", fill=T.INK,
+                          font=T.bold(8))
+
+        # Decisive Stop / Cancel slab bars, the in-context recording controls.
+        controls = tk.Frame(inner, bg=T.PAPER)
+        controls.pack(pady=(22, 0))
+        T.RoundedButton(
+            controls, "Stop recording", command=self.stop_recording,
+            fill=T.RECORD, fill_hover=T.RECORD_HOVER, fg="white", bg=T.PAPER,
+            font_=T.bold(11), padx=22, pady=13, radius=T.RADIUS.MD, icon="stop",
+            icon_color="white", border=T.INK, border_width=T.RULE, caps=True,
+            lip="#B23438", lip_h=3, min_width=210).pack(side="left", padx=(0, 12))
+        T.GhostButton(controls, "Cancel", self._cancel_recording,
+                      bg=T.PAPER).pack(side="left")
         self._animate_wave()
 
     def _animate_wave(self):
@@ -1044,22 +1103,28 @@ class App:
         try:
             c = self._wave
             c.delete("all")
+            reduced = T.MOTION.reduced
             for i, h in enumerate(self._wave_h):
-                target = random.randint(5, 40)
-                h = h + (target - h) * 0.25
+                if reduced:
+                    # Static, calm bar pattern instead of animated bars.
+                    h = 16 + (i % 5) * 7
+                else:
+                    target = random.randint(6, 52)
+                    h = h + (target - h) * 0.25
                 self._wave_h[i] = h
-                x = 4 + i * 8
-                cy = 22
+                x = 6 + i * 9
+                cy = 28
                 col = T.AMBER if i % 7 == 3 else T.INK
-                if h < 9:
+                if h < 11:
                     col = T.BORDER_DEEP
-                c.create_line(x, cy - h / 2, x, cy + h / 2, fill=col, width=3,
+                c.create_line(x, cy - h / 2, x, cy + h / 2, fill=col, width=4,
                               capstyle="round")
             # Pulse the REC dot in time with the timer pulse.
             dot = T.RECORD if self._pulse_on else T.mix(T.RECORD, "#FCE9EA", 0.5)
             self._rec_pill.itemconfigure(self._rec_pill_dot, fill=dot,
                                          outline=dot)
-            self.root.after(110, self._animate_wave)
+            if not reduced:
+                self.root.after(110, self._animate_wave)
         except tk.TclError:
             pass
 
@@ -1088,21 +1153,23 @@ class App:
         area = self._state_area()
         doc = tk.Frame(area, bg=T.PAPER)
         doc.pack(fill="both", expand=True, padx=44, pady=(30, 16))
-        tk.Label(doc, text="Processing your conversation", bg=T.PAPER,
-                 fg=T.INK, font=T.head(18), anchor="w").pack(fill="x",
-                                                             pady=(0, 14))
+        # Editorial header: all-caps title over a thick ink rule.
+        tk.Label(doc, text="PROCESSING YOUR CONVERSATION", bg=T.PAPER,
+                 fg=T.INK, font=T.head(18), anchor="w").pack(fill="x")
+        tk.Frame(doc, bg=T.INK, height=T.RULE).pack(fill="x", pady=(8, 18))
         self._steps_holder = tk.Frame(doc, bg=T.PAPER)
         self._steps_holder.pack(fill="x")
         self._step_rows = []
 
-        self._bar = tk.Canvas(doc, width=520, height=6, bg=T.PAPER,
+        # Thick, squared, ink-bordered progress bar.
+        self._bar = tk.Canvas(doc, height=14, bg=T.PAPER,
                               highlightthickness=0, bd=0)
-        self._bar.pack(anchor="w", pady=(12, 4))
+        self._bar.pack(fill="x", pady=(18, 4))
+        self._bar.bind("<Configure>", lambda e: self._draw_bar())
 
         lab = tk.Frame(doc, bg=T.PAPER)
-        lab.pack(fill="x", pady=(14, 4))
-        tk.Label(lab, text="■", bg=T.PAPER, fg=T.YELLOW, font=T.bold(8)).pack(
-            side="left")
+        lab.pack(fill="x", pady=(16, 4))
+        tk.Frame(lab, bg=T.INK, width=10, height=10).pack(side="left", pady=2)
         tk.Label(lab, text="  TRANSCRIPT SO FAR", bg=T.PAPER, fg=T.MUTED,
                  font=T.bold(8)).pack(side="left")
         self._live = tk.Text(doc, font=T.font(11), bg=T.PAPER, fg=T.INK_SOFT,
@@ -1112,14 +1179,13 @@ class App:
                                  tabs=("52",), lmargin2=52, spacing3=7)
         self._live.tag_configure("tnew", font=T.semi(11), foreground=T.INK,
                                  tabs=("52",), lmargin2=52, spacing3=7)
-        self._live.tag_configure("ts", font=T.med(9), foreground=T.SUBTLE)
-        self._live.tag_configure("caret", font=T.semi(11), foreground=T.AMBER)
+        self._live.tag_configure("ts", font=T.bold(8), foreground=T.MUTED)
+        self._live.tag_configure("caret", font=T.semi(11), foreground=T.AMBER_TEXT)
         self._live.tag_configure("mutedline", font=T.font(10),
                                  foreground=T.MUTED)
         self._live.insert("end", "Listening for speech…", "mutedline")
         self._live.configure(state="disabled")
         self._live.pack(fill="both", expand=True)
-        self._spin_angle = 0
         self._caret_on = True
         self._spin_tick()
         self._draw_bar()
@@ -1129,73 +1195,56 @@ class App:
             return
         try:
             b = self._bar
+            w = max(40, b.winfo_width())
             b.delete("all")
-            T.round_rect(b, 0, 0, 520, 6, 3, fill=T.CARD, outline=T.CARD)
+            T.round_rect(b, 1, 1, w - 1, 13, T.RADIUS.SM, fill=T.WHITE,
+                         outline=T.INK, width=T.RULE)
             frac = self._frac or 0.0
             if frac > 0.01:
-                T.round_rect(b, 0, 0, max(8, 520 * frac), 6, 3, fill=T.AMBER,
+                fillw = max(6, (w - 6) * frac)
+                T.round_rect(b, 3, 3, 3 + fillw, 11, 2, fill=T.AMBER,
                              outline=T.AMBER)
         except tk.TclError:
             pass
 
     def _add_step_row(self, raw):
+        """A numbered, ruled checklist row: big index numeral, label, and a
+        right-aligned status (percentage while active, check when done)."""
         active, done = self._step_labels(raw)
+        idx = len(self._step_rows) + 1
+        tk.Frame(self._steps_holder, bg=T.INK, height=T.RULE).pack(fill="x")
         row = tk.Frame(self._steps_holder, bg=T.PAPER)
-        row.pack(fill="x", pady=3)
-        icon = tk.Canvas(row, width=22, height=22, bg=T.PAPER,
-                         highlightthickness=0, bd=0)
-        icon.pack(side="left")
-        lbl = tk.Label(row, text=active, bg=T.PAPER, fg=T.INK, font=T.semi(10),
+        row.pack(fill="x", pady=(8, 12))
+        num = tk.Label(row, text=f"{idx:02d}", bg=T.PAPER, fg=T.AMBER,
+                       font=T.numeral(20), width=2, anchor="w")
+        num.pack(side="left", padx=(0, 14))
+        lbl = tk.Label(row, text=active, bg=T.PAPER, fg=T.INK, font=T.semi(11),
                        anchor="w")
-        lbl.pack(side="left", padx=(8, 0))
-        pct = tk.Label(row, text="", bg=T.PAPER, fg=T.AMBER, font=T.semi(10))
+        lbl.pack(side="left")
+        pct = tk.Label(row, text="…", bg=T.PAPER, fg=T.AMBER_TEXT, font=T.bold(9))
         pct.pack(side="right")
-        self._step_rows.append({"icon": icon, "lbl": lbl, "pct": pct,
+        self._step_rows.append({"num": num, "lbl": lbl, "pct": pct,
                                 "active": active, "done": done,
                                 "state": "active"})
-        self._paint_step_icons()
 
     def _finish_active_steps(self):
         for r in self._step_rows:
             if r["state"] == "active":
                 r["state"] = "done"
                 r["lbl"].configure(text=r["done"], fg=T.MUTED, font=T.med(10))
-                r["pct"].configure(text="")
-        self._paint_step_icons()
-
-    def _paint_step_icons(self):
-        for r in self._step_rows:
-            c = r["icon"]
-            try:
-                c.delete("all")
-                if r["state"] == "done":
-                    c.create_oval(1, 1, 21, 21, fill=T.GREEN_SOFT,
-                                  outline=T.GREEN_SOFT)
-                    T.draw_icon(c, "check", 11, 11, 10, T.GREEN, 2.0)
-                else:
-                    c.create_arc(3, 3, 19, 19, start=self._spin_angle,
-                                 extent=260, style="arc", outline=T.AMBER,
-                                 width=2)
-            except tk.TclError:
-                pass
+                r["num"].configure(fg=T.GREEN_TEXT)
+                r["pct"].configure(text="✓", fg=T.GREEN_TEXT)
 
     def _spin_tick(self):
         if self.state != "processing":
             return
         try:
-            self._spin_angle = (self._spin_angle - 24) % 360
-            for r in self._step_rows:
-                if r["state"] == "active":
-                    c = r["icon"]
-                    c.delete("all")
-                    c.create_arc(3, 3, 19, 19, start=self._spin_angle,
-                                 extent=260, style="arc", outline=T.AMBER,
-                                 width=2)
-            # Blink the live-transcript caret.
-            self._caret_on = not self._caret_on
+            # Blink the live-transcript caret (steady when reduced motion is on).
+            self._caret_on = True if T.MOTION.reduced else (not self._caret_on)
             self._live.tag_configure(
-                "caret", foreground=T.AMBER if self._caret_on else T.PAPER)
-            self.root.after(120, self._spin_tick)
+                "caret", foreground=T.AMBER_TEXT if self._caret_on else T.PAPER)
+            self.root.after(500 if T.MOTION.reduced else T.MOTION.BASE,
+                            self._spin_tick)
         except tk.TclError:
             pass
 
@@ -1356,8 +1405,10 @@ class App:
         v = self.viewer
         v.configure(state="normal")
         v.delete("1.0", "end")
+        self._sec_rules = []
         self._insert_doc_header(v, self._gen_base)
-        v.insert("end", f"✦  {self._gen_phase}{dots}\n", "pill")
+        # Editorial header framing the streaming notes.
+        v.insert("end", f"{self._gen_phase.upper()}{dots}\n", "sech")
         text = "".join(self._notes_buf).strip()
         if text:
             self._insert_notes_md(v, text)
@@ -1382,24 +1433,22 @@ class App:
         area = self._state_area()
         inner = tk.Frame(area, bg=T.PAPER)
         inner.place(relx=0.5, rely=0.42, anchor="center")
+        # Squared ink-bordered slab holding the sparkle mark.
         tile = tk.Canvas(inner, width=56, height=56, bg=T.PAPER,
                          highlightthickness=0, bd=0)
         tile.pack()
-        T.round_rect(tile, 2, 2, 54, 54, 16, fill=T.YELLOW,
-                     outline=T.YELLOW_DEEP, width=1.2)
+        T.round_rect(tile, 2, 2, 54, 54, T.RADIUS.MD, fill=T.YELLOW,
+                     outline=T.INK, width=T.RULE)
         T.draw_icon(tile, "sparkle", 28, 28, 22, T.INK)
-        tk.Label(inner, text="Turn this into clean notes", bg=T.PAPER,
-                 fg=T.INK, font=T.head(15)).pack(pady=(14, 4))
+        tk.Label(inner, text="TURN THIS INTO CLEAN NOTES", bg=T.PAPER,
+                 fg=T.INK, font=T.head(18)).pack(pady=(16, 6))
         tk.Label(inner, text="You have a transcript. Generate a summary, "
-                 "decisions and action\nitems — written locally on your machine.",
-                 bg=T.PAPER, fg=T.MUTED, font=T.font(10),
+                 "decisions and action items, written locally on your machine.",
+                 bg=T.PAPER, fg=T.MUTED, font=T.font(11), wraplength=440,
                  justify="center").pack()
-        T.RoundedButton(inner, "Generate AI meeting notes",
-                        command=self.generate_ai_notes, fill=T.YELLOW,
-                        fill_hover=T.YELLOW_HOVER, fg=T.INK, bg=T.PAPER,
-                        font_=T.semi(11), padx=22, pady=11, radius=12,
-                        icon="sparkle", icon_color=T.INK,
-                        lip=T.YELLOW_DEEP).pack(pady=(16, 10))
+        T.BarButton(inner, "Generate AI meeting notes",
+                    self.generate_ai_notes, bg=T.PAPER, icon="sparkle",
+                    min_width=280).pack(pady=(20, 12))
         lock = tk.Frame(inner, bg=T.PAPER)
         lock.pack()
         lc = tk.Canvas(lock, width=14, height=14, bg=T.PAPER,
@@ -1440,6 +1489,8 @@ class App:
     def _insert_notes_md(self, v, text):
         """Markdown -> the styled notes document. Consecutive plain lines are
         joined into one paragraph (models often hard-wrap their output)."""
+        # Old embedded rule frames were destroyed when the Text was cleared.
+        self._sec_rules = []
         para = []
 
         def flush():
@@ -1456,8 +1507,8 @@ class App:
             if line.startswith(("## ", "### ", "# ")):
                 flush()
                 label = self._md_clean(line.lstrip("#").strip()).upper()
-                v.insert("end", "■  ", "secsq")
-                v.insert("end", label + "\n", "seclabel")
+                v.insert("end", label + "\n", "sech")
+                self._section_rule(v)
             elif task:
                 flush()
                 v.insert("end", "☐  ", "cbox")
@@ -1517,9 +1568,9 @@ class App:
                        on_bg_download=self._on_bg_download)
 
     def _on_bg_download(self, active, label):
-        """Settings was closed while a model was still downloading — show (or
+        """Settings was closed while a model was still downloading: show (or
         clear) a banner on the main window. Safe to call from any thread."""
-        text = (f"Downloading {label} in the background — you can keep working…"
+        text = (f"Downloading {label} in the background. You can keep working…"
                 if active else None)
         self._banner_async(text)
         if not active:
@@ -1563,8 +1614,17 @@ class App:
     def _reveal_doc(self):
         path = self._current_doc_path() or (
             self._current_base + ".wav" if self._current_base else None)
-        if path and os.path.exists(path):
-            subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+        if not (path and os.path.exists(path)):
+            return
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path])
+            elif os.name == "nt":
+                subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+        except Exception:
+            log.exception("Could not reveal the file in the file manager")
 
     # ---- recording lifecycle (start is async so the UI never freezes) ----
     def start_recording(self):
@@ -1668,7 +1728,7 @@ class App:
         where = f"\n\nProject: {proj}" if proj else ""
         if messagebox.askyesno(
                 config.APP_NAME,
-                "An unfinished recording from a previous session was found — it "
+                "An unfinished recording from a previous session was found. It "
                 "looks like YapYapYap closed before it could be transcribed.\n\n"
                 "The audio was saved safely. Finish transcribing it now?" + where):
             self._recover_queue.pop(0)
@@ -1678,8 +1738,8 @@ class App:
         if messagebox.askyesno(
                 config.APP_NAME,
                 "Keep this unfinished recording for later?\n\n"
-                "Yes — keep it (you'll be asked again next time).\n"
-                "No — delete the audio permanently."):
+                "Yes: keep it (you'll be asked again next time).\n"
+                "No: delete the audio permanently."):
             self._recover_queue.pop(0)
         else:
             engine.discard_interrupted(item["base"])
@@ -1745,12 +1805,12 @@ class App:
         if self.state in ("starting", "recording"):
             self._rec_card = RecordingCard(self.conv_scroll.body,
                                            self._project_label())
-            self._rec_card.pack(fill="x", padx=6, pady=(2, 2))
+            self._rec_card.pack(fill="x", padx=0, pady=0)
 
         shown = self._filtered_items()
         n = len(shown)
         self.count_lbl.configure(
-            text=f"{n} conversation" + ("" if n == 1 else "s"))
+            text=(f"{n} conversation" + ("" if n == 1 else "s")).upper())
         if not shown and self.state == "idle":
             msg = ("Conversations you record will appear\nhere, newest first."
                    if not self._items else "Nothing matches your search.")
@@ -1764,10 +1824,10 @@ class App:
                      font=T.font(9), anchor="w", justify="left").pack(
                 fill="x", pady=(4, 0))
             return
-        for it in shown:
-            card = ConvCard(self.conv_scroll.body, it, self._select_conv,
+        for i, it in enumerate(shown, start=1):
+            card = ConvCard(self.conv_scroll.body, it, i, self._select_conv,
                             self._conv_menu)
-            card.pack(fill="x", padx=6, pady=2)
+            card.pack(fill="x", padx=0, pady=0)
             self._conv_cards[it["base"]] = card
         self._highlight_selected()
 
@@ -1825,6 +1885,7 @@ class App:
         v = self.viewer
         v.configure(state="normal")
         v.delete("1.0", "end")
+        self._sec_rules = []
         self._insert_doc_header(v, base)
         notes_path = base + "_notes.md"
         tx_path = base + "_transcript.txt"
@@ -1835,7 +1896,7 @@ class App:
             with open(tx_path, encoding="utf-8") as f:
                 self._insert_transcript(v, f.read().strip())
         elif os.path.exists(base + ".wav"):
-            v.insert("end", "Audio only — this recording has no transcript "
+            v.insert("end", "Audio only. This recording has no transcript "
                      "yet.", "italicm")
         else:
             v.insert("end", "The files for this conversation could not be "
