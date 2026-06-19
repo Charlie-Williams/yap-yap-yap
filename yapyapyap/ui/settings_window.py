@@ -72,21 +72,22 @@ class SettingsWindow(tk.Toplevel):
                                                                  padx=(0, 8))
         except Exception:
             self._logo = None
-        tk.Label(binner, text="Settings", bg=T.YELLOW, fg=T.INK,
-                 font=T.head(13)).pack(side="left")
-        tk.Frame(self, bg=T.YELLOW_DEEP, height=1).pack(fill="x")
+        tk.Label(binner, text="SETTINGS", bg=T.YELLOW, fg=T.INK,
+                 font=T.head(16)).pack(side="left")
+        # Thick ink rule grounds the title slab (brutalist spine).
+        tk.Frame(self, bg=T.INK, height=T.RULE).pack(fill="x")
 
-        # Tab bar (underline style).
+        # Tab bar (all-caps, ink-underline active).
         self._tabbar = tk.Frame(self, bg=T.SURFACE)
         self._tabbar.pack(fill="x", padx=22)
         self._tab_btns = {}
         self._tabs = {}
-        tk.Frame(self, bg=T.BORDER, height=1).pack(fill="x")
+        tk.Frame(self, bg=T.INK, height=T.RULE).pack(fill="x")
 
         # Footer pinned to the bottom (packed before the body).
         footer = tk.Frame(self, bg=T.SURFACE)
         footer.pack(side="bottom", fill="x")
-        tk.Frame(footer, bg=T.BORDER, height=1).pack(fill="x")
+        tk.Frame(footer, bg=T.INK, height=T.RULE).pack(fill="x")
         btns = tk.Frame(footer, bg=T.SURFACE)
         btns.pack(fill="x", padx=22, pady=12)
         T.AccentButton(btns, "Save", self._save, bg=T.SURFACE).pack(side="right")
@@ -101,8 +102,8 @@ class SettingsWindow(tk.Toplevel):
             self._tabs[name] = frame
             holder = tk.Frame(self._tabbar, bg=T.SURFACE)
             holder.pack(side="left", padx=(0, 22))
-            lbl = tk.Label(holder, text=name, bg=T.SURFACE, fg=T.MUTED,
-                           font=T.semi(10), pady=9, cursor="hand2")
+            lbl = tk.Label(holder, text=name.upper(), bg=T.SURFACE, fg=T.MUTED,
+                           font=T.bold(9), pady=9, cursor="hand2")
             lbl.pack()
             line = tk.Frame(holder, bg=T.SURFACE, height=3)
             line.pack(fill="x")
@@ -118,19 +119,19 @@ class SettingsWindow(tk.Toplevel):
         for n, f in self._tabs.items():
             f.pack_forget()
             lbl, line = self._tab_btns[n]
-            lbl.configure(fg=T.MUTED, font=T.semi(10))
+            lbl.configure(fg=T.MUTED, font=T.bold(9))
             line.configure(bg=T.SURFACE)
         self._tabs[name].pack(fill="both", expand=True)
         lbl, line = self._tab_btns[name]
-        lbl.configure(fg=T.INK, font=T.bold(10))
-        line.configure(bg=T.YELLOW_DEEP)
+        lbl.configure(fg=T.INK, font=T.bold(9))
+        line.configure(bg=T.INK)
 
     # ---- General tab -------------------------------------------------
     def _build_general(self, p):
         intro = tk.Frame(p, bg=T.SURFACE)
         intro.pack(anchor="w", pady=(2, 18))
-        tk.Label(intro, text="Transcription and note-writing models — including "
-                 "downloads — live on the ", bg=T.SURFACE, fg=T.MUTED,
+        tk.Label(intro, text="Transcription and note-writing models, including "
+                 "downloads, live on the ", bg=T.SURFACE, fg=T.MUTED,
                  font=T.font(10)).pack(side="left")
         tk.Label(intro, text="AI Models", bg=T.SURFACE, fg=T.INK,
                  font=T.semi(10)).pack(side="left")
@@ -138,7 +139,7 @@ class SettingsWindow(tk.Toplevel):
                  font=T.font(10)).pack(side="left")
 
         self._section(p, "Recordings folder",
-                      "Master history — every conversation is saved here.")
+                      "Master history. Every conversation is saved here.")
         self._path_row(p, self.v_rec)
 
         self._section(p, "Default transcripts folder",
@@ -238,7 +239,7 @@ class SettingsWindow(tk.Toplevel):
                             highlightthickness=0, bd=0)
             dot.pack(side="left", padx=(0, 6))
             dot.create_oval(1, 1, 9, 9, fill=T.GREEN, outline=T.GREEN)
-            tk.Label(row, text="Ollama is ready", bg=T.CARD, fg=T.GREEN,
+            tk.Label(row, text="Ollama is ready", bg=T.CARD, fg=T.GREEN_TEXT,
                      font=T.semi(10)).pack(side="left")
 
         seen = set()
@@ -253,8 +254,9 @@ class SettingsWindow(tk.Toplevel):
                                     installed_tags, running)
 
     def _subheader(self, parent, title, subtitle):
-        tk.Label(parent, text=title, bg=T.SURFACE, fg=T.INK,
-                 font=T.head(12)).pack(anchor="w", pady=(2, 0))
+        tk.Label(parent, text=title.upper(), bg=T.SURFACE, fg=T.INK,
+                 font=T.head(13), anchor="w").pack(fill="x", pady=(2, 0))
+        tk.Frame(parent, bg=T.INK, height=T.RULE).pack(fill="x", pady=(5, 7))
         tk.Label(parent, text=subtitle, bg=T.SURFACE, fg=T.MUTED, font=T.font(9),
                  wraplength=540, justify="left").pack(anchor="w", pady=(0, 8))
 
@@ -287,7 +289,7 @@ class SettingsWindow(tk.Toplevel):
                         highlightthickness=0, bd=0)
         dot.pack(side="left", padx=(0, 6))
         dot.create_oval(1, 1, 9, 9, fill=T.GREEN, outline=T.GREEN)
-        tk.Label(row, text="In use", bg=T.WHITE, fg=T.GREEN,
+        tk.Label(row, text="In use", bg=T.WHITE, fg=T.GREEN_TEXT,
                  font=T.semi(10)).pack(side="left")
 
     def _dl_widgets(self, right):
@@ -444,7 +446,7 @@ class SettingsWindow(tk.Toplevel):
             messagebox.showinfo(
                 "Still downloading",
                 f"“{label}” is still downloading.\n\nIt will keep "
-                "downloading in the background — you can close Settings and "
+                "downloading in the background, so you can close Settings and "
                 "carry on. You'll see when it finishes on the main window.")
             try:
                 self.on_bg_download(True, label)
@@ -492,7 +494,7 @@ class SettingsWindow(tk.Toplevel):
     def _build_notes(self, p):
         self._section(p, "AI notes prompt",
                       "The instructions sent to the local model. Keep the "
-                      "{transcript} placeholder — it's replaced with the meeting.")
+                      "{transcript} placeholder; it's replaced with the meeting.")
         # Reset button reserved at the bottom; the editor fills the space above.
         T.GhostButton(p, "Reset to default", self._reset_prompt,
                       bg=T.SURFACE).pack(side="bottom", anchor="w", pady=(10, 0))
@@ -532,8 +534,8 @@ class SettingsWindow(tk.Toplevel):
 
     def _show_empty_hint(self):
         self._empty_hint = tk.Label(
-            self._proj_holder, text="No projects yet — add one above.",
-            bg=T.SURFACE, fg=T.SUBTLE, font=T.font(10))
+            self._proj_holder, text="No projects yet. Add one above.",
+            bg=T.SURFACE, fg=T.MUTED, font=T.font(10))
         self._empty_hint.pack(anchor="w", pady=6)
 
     def _add_project_row(self, proj=None):
@@ -556,7 +558,7 @@ class SettingsWindow(tk.Toplevel):
         tk.Label(top, text="Name", bg=T.WHITE, fg=T.MUTED, width=6,
                  anchor="w", font=T.font(9)).pack(side="left")
         T.entry(top, v_name, width=24).pack(side="left", padx=(6, 0))
-        rm = tk.Label(top, text="Remove", bg=T.WHITE, fg=T.RECORD,
+        rm = tk.Label(top, text="Remove", bg=T.WHITE, fg=T.RECORD_TEXT,
                       font=T.semi(9), cursor="hand2")
         rm.pack(side="right")
 
@@ -613,10 +615,11 @@ class SettingsWindow(tk.Toplevel):
 
     # ---- shared widgets ---------------------------------------------
     def _section(self, parent, title, subtitle):
-        tk.Label(parent, text=title, bg=T.SURFACE, fg=T.INK,
-                 font=T.head(12)).pack(anchor="w")
+        tk.Label(parent, text=title.upper(), bg=T.SURFACE, fg=T.INK,
+                 font=T.head(13), anchor="w").pack(fill="x")
+        tk.Frame(parent, bg=T.INK, height=T.RULE).pack(fill="x", pady=(5, 7))
         tk.Label(parent, text=subtitle, bg=T.SURFACE, fg=T.MUTED, font=T.font(9),
-                 justify="left", wraplength=540).pack(anchor="w", pady=(1, 0))
+                 justify="left", wraplength=540, anchor="w").pack(anchor="w")
 
     def _path_row(self, parent, var):
         row = tk.Frame(parent, bg=T.SURFACE)

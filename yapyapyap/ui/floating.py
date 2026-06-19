@@ -4,99 +4,58 @@ floating.py
 The little draggable recording indicator that floats over every other window.
 
 When you minimise the main window while a recording is in progress, this
-appears: a small paper-white disc with the bird and a softly pulsing status
-dot (red while recording, amber while processing) - calm and compact, in line
-with the app's design system. Drag it anywhere; click to bring the app back.
+appears: a squared, ink-bordered yellow slab with a red REC dot, an all-caps
+REC eyebrow and a big Bricolage timer, in line with the app's editorial
+brutalist look. The recording moment is the hero, so even minimised it stays
+loud and legible. Drag it anywhere; click to bring the app back.
 
-Each frame is composited in PIL (true alpha) and shown on a borderless,
-always-on-top window. The corners outside the disc are made transparent with
-a hard-edged colour key, so the disc and the bird stay smooth.
+It is a plain borderless, always-on-top Tk window (no transparency or image
+compositing needed for a hard rectangular slab), so it stays crisp on every
+platform. The status dot breathes while recording and respects reduced motion.
 """
 
-import os
 import sys
-import math
 import tkinter as tk
 
-_IS_MAC = sys.platform == "darwin"
+from yapyapyap.ui import theme as T
 
-try:
-    from PIL import Image, ImageDraw, ImageTk
-    _HAVE_PIL = True
-except Exception:
-    _HAVE_PIL = False
-
-from yapyapyap import config
-
-_ASSETS = config.ASSETS_DIR
-KEY = "#FF00FF"             # transparent colour key (magenta - unused in the art)
-PAPER = (255, 254, 251)     # disc fill (theme PAPER)
-HAIRLINE = (228, 206, 114)  # theme BORDER_DEEP
-YELLOW = (255, 222, 33)     # hover ring (theme YELLOW)
+# Defaults kept as RGB tuples for back-compat with callers that pass an accent
+# colour (e.g. App._update_indicator passes the record red).
 RECORD = (229, 72, 77)      # recording dot (theme RECORD)
 PROCESS = (184, 134, 11)    # processing dot (theme AMBER)
 
 
-def _lerp(c1, c2, t):
-    t = max(0.0, min(1.0, t))
-    return tuple(int(a + (b - a) * t) for a, b in zip(c1, c2))
+def _hex(c):
+    """Accept an (r,g,b) tuple or a #rrggbb string; return #rrggbb."""
+    if isinstance(c, str):
+        return c
+    return "#%02x%02x%02x" % tuple(int(v) for v in c)
 
 
 class RecordingIndicator(tk.Toplevel):
-    SIZE = 56          # window square
-    R = 25             # disc radius
-    BIRD = 26          # bird size (px)
-    SS = 4             # supersampling for crisp circles
+    W = 150            # window width
+    H = 60             # window height
+    LIP = 3            # ink bottom lip (slab depth)
 
     def __init__(self, root, on_click):
         super().__init__(root)
         self._root = root
         self._on_click = on_click
         self.overrideredirect(True)
-        # Window transparency is platform-specific:
-        #   Windows - a hard-edged magenta colour key (-transparentcolor)
-        #   macOS   - a real transparent window (-transparent + systemTransparent),
-        #             so we can rely on the art's own alpha instead of keying.
-        # _use_color_key drives how _render composites the final frame.
-        self._use_color_key = False
-        bg = KEY
         try:
             self.attributes("-topmost", True)
-            if _IS_MAC:
-                self.attributes("-transparent", True)
-                bg = "systemTransparent"
-            else:
-                self.attributes("-transparentcolor", KEY)
-                self._use_color_key = True
         except tk.TclError:
-            # No transparency support: fall back to the colour key (best effort).
-            self._use_color_key = True
-        self._bg = bg
-        self.configure(bg=bg)
+            pass
+        self.configure(bg=T.INK)
 
-        self.canvas = tk.Canvas(self, width=self.SIZE, height=self.SIZE, bg=bg,
+        self.canvas = tk.Canvas(self, width=self.W, height=self.H, bg=T.INK,
                                 highlightthickness=0, bd=0, cursor="hand2")
         self.canvas.pack()
 
-        self._bird = None
-        if _HAVE_PIL:
-            try:
-                bird = Image.open(
-                    os.path.join(_ASSETS, "logo_256.png")).convert("RGBA")
-                # The logo art isn't centred within its own canvas, so crop to
-                # the bird's actual pixels; we then place THAT centred in the
-                # disc (resized per-frame, preserving its aspect ratio).
-                bbox = bird.getchannel("A").getbbox()
-                if bbox:
-                    bird = bird.crop(bbox)
-                self._bird = bird
-            except Exception:
-                self._bird = None
-        self._photo = None
-
-        self._phase = 0.0
+        self._accent = _hex(RECORD)
+        self._time = "00:00"
+        self._pulse_on = True
         self._hover = False
-        self._accent = RECORD
         self._anim_on = False
         self._placed = False
         self._drag_dx = self._drag_dy = 0
@@ -106,17 +65,22 @@ class RecordingIndicator(tk.Toplevel):
         c.bind("<ButtonPress-1>", self._press)
         c.bind("<B1-Motion>", self._drag)
         c.bind("<ButtonRelease-1>", self._release)
-        c.bind("<Enter>", lambda e: setattr(self, "_hover", True))
-        c.bind("<Leave>", lambda e: setattr(self, "_hover", False))
+        c.bind("<Enter>", lambda e: self._set_hover(True))
+        c.bind("<Leave>", lambda e: self._set_hover(False))
 
         self.withdraw()
 
+    def _set_hover(self, on):
+        self._hover = on
+        if self._anim_on:
+            self._draw()
+
     # ---- show / hide -------------------------------------------------
     def show(self, accent=RECORD):
-        self._accent = tuple(accent)
+        self._accent = _hex(accent)
         if not self._placed:
             sw = self.winfo_screenwidth()
-            self.geometry(f"{self.SIZE}x{self.SIZE}+{sw - self.SIZE - 32}+72")
+            self.geometry(f"{self.W}x{self.H}+{sw - self.W - 32}+72")
             self._placed = True
         self.deiconify()
         self.lift()
@@ -132,95 +96,52 @@ class RecordingIndicator(tk.Toplevel):
         self._anim_on = False
         self.withdraw()
 
+    def set_time(self, t):
+        """Update the displayed timer (called from the main window's tick)."""
+        self._time = t
+        if self._anim_on:
+            try:
+                self._draw()
+            except tk.TclError:
+                pass
+
     # ---- animation ---------------------------------------------------
     def _tick(self):
         if not self._anim_on:
             return
         try:
-            self._phase = (self._phase + 0.022) % 1.0
-            self._render()
-            self.after(40, self._tick)
+            # Reduced motion: hold the dot solid (no breathing); still draw once.
+            self._pulse_on = True if T.MOTION.reduced else (not self._pulse_on)
+            self._draw()
+            if not T.MOTION.reduced:
+                self.after(T.MOTION.PULSE // 2, self._tick)
         except tk.TclError:
             self._anim_on = False
 
-    def _render(self):
-        if not _HAVE_PIL:
-            return self._render_basic()
-        ss = self.SS
-        S = self.SIZE * ss
-        cx = S / 2
-        R = self.R * ss
-        acc = self._accent
-
-        # Draw on a transparent layer at 4x (smooth interior anti-aliasing),
-        # then key it down with a hard-edged mask so the colour key stays clean.
-        img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-
-        # Paper disc + hairline (a touch warmer on hover).
-        fill = _lerp(PAPER, YELLOW, 0.12) if self._hover else PAPER
-        d.ellipse([cx - R, cx - R, cx + R, cx + R], fill=fill + (255,))
-        edge = YELLOW if self._hover else HAIRLINE
-        d.ellipse([cx - R, cx - R, cx + R, cx + R], outline=edge + (255,),
-                  width=2 * ss)
-
-        # The bird, centred (preserving its aspect ratio), nudged up a touch to
-        # leave room for the status dot.
-        if self._bird is not None:
-            bw, bh = self._bird.size
-            target = self.BIRD * ss
-            scale = target / max(bw, bh)
-            nw, nh = max(1, int(bw * scale)), max(1, int(bh * scale))
-            bird = self._bird.resize((nw, nh), Image.LANCZOS)
-            img.alpha_composite(bird, (int(cx - nw / 2),
-                                       int(cx - nh / 2 - 2 * ss)))
-
-        # Status dot (bottom-centre), breathing gently.
-        breathe = 0.5 + 0.5 * math.sin(self._phase * 2 * math.pi)
-        dy = cx + R - 9.5 * ss
-        r_dot = (3.2 + 0.7 * breathe) * ss
-        halo = _lerp(acc, fill, 0.45 + 0.35 * (1 - breathe))
-        d.ellipse([cx - r_dot - 2 * ss, dy - r_dot - 2 * ss,
-                   cx + r_dot + 2 * ss, dy + r_dot + 2 * ss],
-                  fill=halo + (255,))
-        d.ellipse([cx - r_dot, dy - r_dot, cx + r_dot, dy + r_dot],
-                  fill=acc + (255,))
-
-        img = img.resize((self.SIZE, self.SIZE), Image.LANCZOS)
-        if self._use_color_key:
-            # Windows: flatten alpha onto the magenta key so the corners are
-            # keyed out crisply by -transparentcolor.
-            mask = img.getchannel("A").point(lambda a: 255 if a > 127 else 0)
-            out = Image.new("RGBA", img.size, (255, 0, 255, 255))
-            out.paste(img, (0, 0), mask)
-        else:
-            # macOS (real transparent window): keep the art's own alpha so the
-            # disc edges stay smooth against the transparent background.
-            out = img
-        self._photo = ImageTk.PhotoImage(out)
-        self.canvas.delete("all")
-        self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
-
-    def _render_basic(self):
-        """Fallback if Pillow is unavailable: plain disc + dot + bird PNG."""
+    def _draw(self):
         c = self.canvas
         c.delete("all")
-        cx = self.SIZE / 2
-        R = self.R
-        c.create_oval(cx - R, cx - R, cx + R, cx + R, fill="#FFFEFB",
-                      outline="#E4CE72", width=2)
-        if not hasattr(self, "_bird_tk"):
-            try:
-                self._bird_tk = tk.PhotoImage(file=os.path.join(_ASSETS, "logo_32.png"))
-            except Exception:
-                self._bird_tk = None
-        if self._bird_tk:
-            c.create_image(cx, cx - 3, image=self._bird_tk)
-        breathe = 0.5 + 0.5 * math.sin(self._phase * 2 * math.pi)
-        col = "#%02x%02x%02x" % _lerp(self._accent, PAPER, 0.25 * breathe)
-        r = 3.5 + breathe
-        dy = cx + R - 9
-        c.create_oval(cx - r, dy - r, cx + r, dy + r, fill=col, outline=col)
+        W, H, lip = self.W, self.H, self.LIP
+        # Ink base doubles as the 2px border and the deep bottom lip.
+        c.create_rectangle(0, 0, W, H, fill=T.INK, outline=T.INK)
+        # Yellow slab face, lifted off the ink lip.
+        face = T.RAIL_HOVER if self._hover else T.YELLOW
+        fy2 = H - lip
+        c.create_rectangle(2, 2, W - 2, fy2 - 1, fill=face, outline=face)
+        cy = (2 + fy2) / 2
+
+        # Breathing red record dot.
+        dot = self._accent if self._pulse_on else T.mix(self._accent, face, 0.55)
+        r = 5
+        dx = 18
+        c.create_oval(dx - r, cy - r, dx + r, cy + r, fill=dot, outline=dot)
+
+        # REC eyebrow (all-caps, tracked) + big Bricolage timer, stacked.
+        tx = 32
+        c.create_text(tx, cy - 11, text="R E C", anchor="w", fill=T.INK,
+                      font=T.bold(8))
+        c.create_text(tx, cy + 7, text=self._time, anchor="w", fill=T.INK,
+                      font=T.brand(19))
 
     # ---- drag / click ------------------------------------------------
     def _press(self, e):
